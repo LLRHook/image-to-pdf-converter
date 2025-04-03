@@ -11,7 +11,7 @@ def convert_image_to_pdf(image_path, output_path=None):
     Args:
         image_path (str): Path to the input image
         output_path (str, optional): Path for the output PDF. If not provided,
-                                   will use the same name as input with .pdf extension
+                will use the same name as input with .pdf extension
     """
     # If no output path is specified, create one from the input path
     if output_path is None:

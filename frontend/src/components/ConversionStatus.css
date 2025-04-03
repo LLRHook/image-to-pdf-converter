@@ -1,0 +1,49 @@
+.conversion-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  padding: 20px;
+}
+
+.error-message {
+  color: #dc3545;
+  background-color: #f8d7da;
+  border: 1px solid #f5c6cb;
+  padding: 10px 20px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+
+.convert-button,
+.download-button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.3s ease;
+}
+
+.convert-button {
+  background-color: #007bff;
+  color: white;
+}
+
+.convert-button:hover:not(:disabled) {
+  background-color: #0056b3;
+}
+
+.convert-button:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+}
+
+.download-button {
+  background-color: #28a745;
+  color: white;
+}
+
+.download-button:hover {
+  background-color: #218838;
+} 

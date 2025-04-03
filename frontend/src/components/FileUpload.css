@@ -1,0 +1,41 @@
+.file-upload-container {
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+}
+
+.dropzone {
+  width: 100%;
+  max-width: 500px;
+  height: 200px;
+  border: 2px dashed #ccc;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background-color: #f8f9fa;
+}
+
+.dropzone:hover {
+  border-color: #007bff;
+  background-color: #e9ecef;
+}
+
+.dropzone.active {
+  border-color: #28a745;
+  background-color: #e8f5e9;
+}
+
+.dropzone.uploading {
+  border-color: #ffc107;
+  background-color: #fff3cd;
+}
+
+.dropzone p {
+  margin: 0;
+  color: #666;
+  text-align: center;
+  padding: 20px;
+} 
