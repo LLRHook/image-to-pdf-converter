@@ -1,45 +1,61 @@
 # Image to PDF Converter
 
-A simple Python script that converts images (PNG, JPEG, etc.) to PDF format.
+A web application that converts images to PDF files, built with React and Flask.
 
-## Features
+## Project Structure
 
-- Converts single images to PDF
-- Maintains image aspect ratio
-- Centers the image on the page
-- Supports various image formats (PNG, JPEG, etc.)
-- Command-line interface for easy use
+```
+image-to-pdf-converter/
+├── frontend/           # React application
+│   ├── public/        # Static files
+│   ├── src/          # React source code
+│   └── package.json  # Frontend dependencies
+└── backend/          # Flask application
+    ├── app.py        # Flask application
+    ├── image_to_pdf.py  # Image to PDF conversion logic
+    └── requirements.txt # Backend dependencies
+```
 
-## Installation
+## Setup Instructions
 
-1. Make sure you have Python 3.6 or higher installed
-2. Install the required dependencies:
+### Backend Setup
+1. Navigate to the backend directory:
+   ```bash
+   cd backend
+   ```
+2. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   ```
+3. Activate the virtual environment:
+   - Windows: `venv\Scripts\activate`
+   - Unix/MacOS: `source venv/bin/activate`
+4. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
+5. Run the Flask server:
+   ```bash
+   python app.py
+   ```
 
-## Usage
+### Frontend Setup
+1. Navigate to the frontend directory:
+   ```bash
+   cd frontend
+   ```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Start the development server:
+   ```bash
+   npm start
+   ```
 
-Basic usage:
-```bash
-python image_to_pdf.py path/to/your/image.jpg
-```
+## Development
+- Backend runs on http://localhost:5000
+- Frontend runs on http://localhost:3000
 
-Specify custom output path:
-```bash
-python image_to_pdf.py path/to/your/image.jpg -o output.pdf
-```
-
-## Supported Image Formats
-
-- PNG
-- JPEG/JPG
-- BMP
-- TIFF
-- And other formats supported by Pillow library
-
-## Requirements
-
-- Python 3.6+
-- Pillow
-- reportlab 
+## License
+MIT 
