@@ -42,7 +42,7 @@
   background-color: #f8f9fa;
 }
 
-.global-error {
+.error-message {
   color: #dc3545;
   background-color: #f8d7da;
   border: 1px solid #f5c6cb;
@@ -51,6 +51,39 @@
   margin-bottom: 20px;
   max-width: 500px;
   width: 100%;
+}
+
+.conversion-status {
+  margin-top: 20px;
+  padding: 15px;
+  border-radius: 4px;
+  background-color: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 500px;
+}
+
+.download-button {
+  background-color: #28a745;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background-color 0.3s ease;
+}
+
+.download-button:hover {
+  background-color: #218838;
+}
+
+.App-footer {
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-top: 1px solid #dee2e6;
+  color: #6c757d;
+  font-size: 0.9rem;
 }
 
 .App-link {
