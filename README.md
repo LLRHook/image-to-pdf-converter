@@ -1,61 +1,88 @@
 # Image to PDF Converter
 
-A web application that converts images to PDF files, built with React and Flask.
+A web-based tool that converts images to PDF files directly in your browser. No server required - all processing happens locally on your device!
 
-## Project Structure
+## Features
 
-```
-image-to-pdf-converter/
-├── frontend/           # React application
-│   ├── public/        # Static files
-│   ├── src/          # React source code
-│   └── package.json  # Frontend dependencies
-└── backend/          # Flask application
-    ├── app.py        # Flask application
-    ├── image_to_pdf.py  # Image to PDF conversion logic
-    └── requirements.txt # Backend dependencies
-```
+- Convert images (PNG, JPEG) to PDF
+- Client-side processing - no files are uploaded to any server
+- Maintains image aspect ratio and quality
+- Automatic image compression for large files
+- Mobile-friendly interface
+- Drag and drop support
+- Works offline once loaded
 
-## Setup Instructions
+## Live Demo
 
-### Backend Setup
-1. Navigate to the backend directory:
+Visit [https://LLRHook.github.io/image-to-pdf-converter](https://LLRHook.github.io/image-to-pdf-converter)
+
+## How It Works
+
+1. Select or drag & drop an image
+2. The image is processed entirely in your browser:
+   - Large images are automatically compressed
+   - The image is converted to PDF format
+   - The PDF is centered and scaled to fit the page
+3. Download your converted PDF
+
+## Technical Details
+
+- Built with React for the frontend
+- Uses `pdf-lib` for PDF generation
+- Uses `browser-image-compression` for handling large images
+- All processing happens client-side for privacy and speed
+
+## Development Setup
+
+1. Clone the repository:
    ```bash
-   cd backend
-   ```
-2. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   ```
-3. Activate the virtual environment:
-   - Windows: `venv\Scripts\activate`
-   - Unix/MacOS: `source venv/bin/activate`
-4. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-5. Run the Flask server:
-   ```bash
-   python app.py
+   git clone https://github.com/LLRHook/image-to-pdf-converter.git
+   cd image-to-pdf-converter
    ```
 
-### Frontend Setup
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
 2. Install dependencies:
    ```bash
+   cd frontend
    npm install
    ```
+
 3. Start the development server:
    ```bash
    npm start
    ```
 
-## Development
-- Backend runs on http://localhost:5000
-- Frontend runs on http://localhost:3000
+4. Open [http://localhost:3000](http://localhost:3000) in your browser
+
+## Building for Production
+
+1. Build the project:
+   ```bash
+   cd frontend
+   npm run build
+   ```
+
+2. The build files will be in the `frontend/build` directory
+
+## Deployment
+
+This project is configured for GitHub Pages deployment. To deploy:
+
+1. Update the `homepage` field in `frontend/package.json` with your GitHub Pages URL
+2. Push your changes to GitHub
+3. GitHub Actions will automatically build and deploy your site
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Privacy
+
+This application processes all files locally in your web browser. No images or data are ever uploaded to any server.
 
 ## License
-MIT 
+
+MIT License - feel free to use this project for personal or commercial purposes.
+
+## Support
+
+If you encounter any issues or have questions, please open an issue on GitHub. 
