@@ -1,61 +1,96 @@
-import React, { useCallback, useState } from 'react';
-import { useDropzone } from 'react-dropzone';
-import { convertImageToPDF } from '../utils/pdfConverter';
+import React, { useState } from 'react';
 import './FileUpload.css';
 
-const FileUpload = ({ onConversionStart, onConversionComplete, onError }) => {
-  const [isConverting, setIsConverting] = useState(false);
+const FileUpload = () => {
+  const [inputFormat, setInputFormat] = useState('');
+  const [outputFormat, setOutputFormat] = useState('');
+  const [file, setFile] = useState(null);
 
-  const onDrop = useCallback(async (acceptedFiles) => {
-    if (acceptedFiles.length === 0) return;
-
-    const file = acceptedFiles[0];
-    setIsConverting(true);
-    onConversionStart();
-
-    try {
-      const pdfBlob = await convertImageToPDF(file);
-      
-      // Create a download URL for the PDF
-      const pdfUrl = URL.createObjectURL(pdfBlob);
-      onConversionComplete(pdfUrl, `converted-${file.name.split('.')[0]}.pdf`);
-    } catch (error) {
-      console.error('Conversion error:', error);
-      onError(error.message || 'Failed to convert image to PDF');
-    } finally {
-      setIsConverting(false);
-    }
-  }, [onConversionStart, onConversionComplete, onError]);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'image/*': ['.png', '.jpg', '.jpeg']
+  // Group similar formats together
+  const formatGroups = {
+    'document': {
+      label: 'Document Formats',
+      formats: ['doc', 'docx', 'pdf', 'txt']
     },
-    maxFiles: 1,
-    maxSize: 50 * 1024 * 1024 // 50MB max file size
-  });
+    'spreadsheet': {
+      label: 'Spreadsheet Formats',
+      formats: ['xls', 'xlsx', 'csv', 'google-sheets']
+    },
+    'image': {
+      label: 'Image Formats',
+      formats: ['png', 'jpg', 'jpeg', 'pdf']
+    }
+  };
+
+  const handleFileChange = (event) => {
+    setFile(event.target.files[0]);
+  };
+
+  const handleConvert = () => {
+    if (!file || !inputFormat || !outputFormat) {
+      alert('Please select a file and both formats.');
+      return;
+    }
+    // Placeholder for conversion logic
+    alert(`Converting ${file.name} from ${inputFormat} to ${outputFormat}`);
+  };
+
+  // Get available output formats based on input format
+  const getOutputFormats = () => {
+    if (!inputFormat) return [];
+    
+    // Special case for PNG to PDF
+    if (inputFormat === 'png') {
+      return ['pdf'];
+    }
+
+    // For other formats, return formats from the same group
+    for (const group of Object.values(formatGroups)) {
+      if (group.formats.includes(inputFormat)) {
+        return group.formats.filter(format => format !== inputFormat);
+      }
+    }
+    return [];
+  };
 
   return (
-    <div className="file-upload-container">
-      <div
-        {...getRootProps()}
-        className={`dropzone ${isDragActive ? 'active' : ''} ${isConverting ? 'converting' : ''}`}
-      >
-        <input {...getInputProps()} />
-        {isConverting ? (
-          <p>Converting image to PDF...</p>
-        ) : isDragActive ? (
-          <p>Drop the image here ...</p>
-        ) : (
-          <div>
-            <p>Drag 'n' drop an image here, or click to select one</p>
-            <p className="file-info">
-              Supported formats: PNG, JPG, JPEG (max 50MB)
-            </p>
-          </div>
-        )}
+    <div className="file-upload">
+      <h2>File Converter</h2>
+      <div className="dropdowns">
+        <label>
+          Input Format:
+          <select value={inputFormat} onChange={(e) => {
+            setInputFormat(e.target.value);
+            setOutputFormat(''); // Reset output format when input changes
+          }}>
+            <option value="">Select Format</option>
+            {Object.entries(formatGroups).map(([key, group]) => (
+              <optgroup key={key} label={group.label}>
+                {group.formats.map(format => (
+                  <option key={format} value={format}>{format.toUpperCase()}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        <label>
+          Output Format:
+          <select 
+            value={outputFormat} 
+            onChange={(e) => setOutputFormat(e.target.value)}
+            disabled={!inputFormat}
+          >
+            <option value="">Select Format</option>
+            {getOutputFormats().map(format => (
+              <option key={format} value={format}>{format.toUpperCase()}</option>
+            ))}
+          </select>
+        </label>
       </div>
+      <div className="file-input">
+        <input type="file" onChange={handleFileChange} />
+      </div>
+      <button onClick={handleConvert}>Convert</button>
     </div>
   );
 };
