@@ -1,90 +1,58 @@
-# Image to PDF Converter
+# File Format Converter — Chrome Extension
 
-A web-based tool that converts images to PDF files directly in your browser. No server required - all processing happens locally on your device!
+A Chrome extension that converts images, documents, and spreadsheets between formats. All conversions happen in-browser — no data leaves your device.
 
 ## Features
 
-- Convert images (PNG, JPEG) to PDF
-- Client-side processing - no files are uploaded to any server
-- Maintains image aspect ratio and quality
-- Automatic image compression for large files
-- Mobile-friendly interface
-- Drag and drop support
-- Works offline once loaded
+- **Popup converter**: Click the extension icon to upload and convert files
+- **Right-click context menu**: Right-click any image on a webpage to convert it to PDF, PNG, or JPG
+- **Supported conversions**:
+  - Images (PNG, JPG, JPEG) → PDF, PNG, JPG, JPEG
+  - Documents (TXT, DOCX) → PDF
+  - Spreadsheets (XLSX, CSV) → CSV, XLSX
+- Client-side processing — no files uploaded anywhere
+- Drag-and-drop file upload
 
-## Live Demo
+## Installation
 
-Visit [https://LLRHook.github.io/image-to-pdf-converter](https://LLRHook.github.io/image-to-pdf-converter)
+### From source (development)
 
-## How It Works
-
-1. Select or drag & drop an image
-2. The image is processed entirely in your browser:
-   - Large images are automatically compressed
-   - The image is converted to PDF format
-   - The PDF is centered and scaled to fit the page
-3. Download your converted PDF
-
-## Technical Details
-
-- Built with React for the frontend
-- Uses `pdf-lib` for PDF generation
-- Uses `browser-image-compression` for handling large images
-- All processing happens client-side for privacy and speed
-
-## Development Setup
-
-changed
-
-1. Clone the repository:
+1. Clone and build:
    ```bash
    git clone https://github.com/LLRHook/image-to-pdf-converter.git
    cd image-to-pdf-converter
-   ```
-
-2. Install dependencies:
-   ```bash
-   cd frontend
    npm install
-   ```
-
-3. Start the development server:
-   ```bash
-   npm start
-   ```
-
-4. Open [http://localhost:3000](http://localhost:3000) in your browser
-
-## Building for Production
-
-1. Build the project:
-   ```bash
-   cd frontend
    npm run build
    ```
 
-2. The build files will be in the `frontend/build` directory
+2. Load in Chrome:
+   - Navigate to `chrome://extensions/`
+   - Enable **Developer mode** (top-right toggle)
+   - Click **Load unpacked**
+   - Select the `dist/` folder
 
-## Deployment
+## Development
 
-This project is configured for GitHub Pages deployment. To deploy:
+```bash
+npm install        # Install dependencies
+npm run dev        # Start Vite dev server (for UI development)
+npm run build      # Build extension to dist/
+```
 
-1. Update the `homepage` field in `frontend/package.json` with your GitHub Pages URL
-2. Push your changes to GitHub
-3. GitHub Actions will automatically build and deploy your site
+After changing code, run `npm run build` and click the refresh icon on `chrome://extensions/` to reload.
 
-## Contributing
+## Architecture
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+- **Manifest V3** Chrome extension
+- **Popup** (`popup.html`) — React UI with file upload and format selection
+- **Service worker** (`service-worker.js`) — Registers context menus, handles image fetch + conversion
+- **Offscreen document** (`offscreen.html`) — Canvas-based image format conversion (used by context menu)
+- **Conversion engine** (`src/conversion/`) — Modular converters using pdf-lib, jsPDF, mammoth, xlsx
 
 ## Privacy
 
-This application processes all files locally in your web browser. No images or data are ever uploaded to any server.
+All conversions happen locally in your browser. No files or data are sent to any server.
 
 ## License
 
-MIT License - feel free to use this project for personal or commercial purposes.
-
-## Support
-
-If you encounter any issues or have questions, please open an issue on GitHub. 
+MIT
