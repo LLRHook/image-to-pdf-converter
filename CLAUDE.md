@@ -12,6 +12,7 @@ All commands run from the project root:
 
 - **Dev server:** `npm run dev` (Vite dev server for UI work)
 - **Build:** `npm run build` (outputs to `dist/`)
+- **Tests:** `npm test` (Node's built-in runner; no browser or additional test dependencies)
 - **Load in Chrome:** `chrome://extensions/` → Developer mode → Load unpacked → select `dist/`
 
 ## Architecture
@@ -23,8 +24,8 @@ All commands run from the project root:
 | Entry | File | Purpose |
 |-------|------|---------|
 | Popup | `popup.html` → `src/popup/main.jsx` | React UI for file upload + conversion |
-| Service worker | `src/background/service-worker.js` | Context menus, image fetch, pdf-lib conversion |
-| Offscreen | `offscreen.html` → `src/offscreen/offscreen.js` | Canvas-based image-to-image conversion |
+| Service worker | `src/background/service-worker.js` | Context menus, download startup and resource cleanup |
+| Offscreen | `offscreen.html` → `src/offscreen/offscreen.js` | Image fetch/conversion and ownership of download blob URLs |
 
 ### Component hierarchy
 
@@ -44,8 +45,14 @@ All commands run from the project root:
 ### Context menu flow
 
 1. Right-click image → "Convert image to..." → PDF/PNG/JPG
-2. Service worker fetches image, converts (pdf-lib for PDF, offscreen doc for image-to-image)
-3. Triggers `chrome.downloads.download()`
+2. Service worker creates/reuses the offscreen document with the `BLOBS` reason
+3. Offscreen document fetches a bounded image response, converts it, and returns a blob URL
+4. Service worker starts `chrome.downloads.download()` and tells offscreen to revoke the URL when complete/interrupted, or if startup fails
+
+Popup conversions hand their output to offscreen before downloading so closing
+the popup cannot invalidate a prepared download. Blob URL APIs belong to document
+contexts; they are unavailable in the service worker. Chrome 116+ is required for
+`chrome.runtime.getContexts()`.
 
 ### Key libraries
 
@@ -68,3 +75,5 @@ Vite with `@vitejs/plugin-react`. Multi-entry build: popup (HTML), offscreen (HT
 
 - `src/shared/constants.js` — Format groups, output format logic, max file size
 - `src/shared/messaging.js` — Chrome message type constants
+- `src/shared/validation.js` — File size and image dimension limits
+- `src/conversion/png.js` — Bounded PNG chunk/CRC/deflate validation before PDF decoding

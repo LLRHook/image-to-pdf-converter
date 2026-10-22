@@ -1,6 +1,8 @@
 import React, { useState, useCallback } from 'react';
 import { convert } from '../../conversion';
 import { FORMAT_GROUPS, getOutputFormats } from '../../shared/constants';
+import { validateFile } from '../../shared/validation.js';
+import { downloadBlob, outputFilename } from '../../shared/download.js';
 
 export default function FileUpload() {
   const [file, setFile] = useState(null);
@@ -12,6 +14,16 @@ export default function FileUpload() {
 
   const handleFile = useCallback((selectedFile) => {
     if (!selectedFile) return;
+    try {
+      validateFile(selectedFile);
+    } catch (err) {
+      setFile(null);
+      setInputFormat('');
+      setOutputFormat('');
+      setError(err.message);
+      setStatus('error');
+      return;
+    }
     setFile(selectedFile);
     const ext = selectedFile.name.split('.').pop().toLowerCase();
     setInputFormat(ext);
@@ -24,9 +36,9 @@ export default function FileUpload() {
     (e) => {
       e.preventDefault();
       setIsDragging(false);
-      handleFile(e.dataTransfer.files[0]);
+      if (status !== 'converting') handleFile(e.dataTransfer.files[0]);
     },
-    [handleFile]
+    [handleFile, status]
   );
 
   const handleConvert = async () => {
@@ -37,19 +49,7 @@ export default function FileUpload() {
 
     try {
       const blob = await convert(file, inputFormat, outputFormat);
-      const filename = `${file.name.split('.')[0]}.${outputFormat}`;
-
-      if (typeof chrome !== 'undefined' && chrome.downloads) {
-        const url = URL.createObjectURL(blob);
-        chrome.downloads.download({ url, filename, saveAs: true });
-      } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-      }
+      await downloadBlob(blob, outputFilename(file.name, outputFormat));
 
       setStatus('done');
     } catch (err) {
@@ -84,6 +84,7 @@ export default function FileUpload() {
         <input
           id="file-input"
           type="file"
+          disabled={status === 'converting'}
           className="hidden"
           onChange={(e) => handleFile(e.target.files[0])}
         />
@@ -113,6 +114,7 @@ export default function FileUpload() {
           </label>
           <select
             value={inputFormat}
+            disabled={status === 'converting'}
             onChange={(e) => {
               setInputFormat(e.target.value);
               setOutputFormat('');
@@ -138,7 +140,7 @@ export default function FileUpload() {
           <select
             value={outputFormat}
             onChange={(e) => setOutputFormat(e.target.value)}
-            disabled={!inputFormat}
+            disabled={!inputFormat || status === 'converting'}
             className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
           >
             <option value="">Select</option>

@@ -1,10 +1,15 @@
-import { imageToPdf } from './imageToPdf';
-import { imageToImage } from './imageToImage';
-import { textToPdf } from './textToPdf';
-import { docxToPdf } from './docxToPdf';
-import { spreadsheetToCsv, csvToSpreadsheet } from './spreadsheet';
+import { imageToPdf } from './imageToPdf.js';
+import { imageToImage } from './imageToImage.js';
+import { textToPdf } from './textToPdf.js';
+import { docxToPdf } from './docxToPdf.js';
+import { spreadsheetToCsv, csvToSpreadsheet } from './spreadsheet.js';
+import { validateFile } from '../shared/validation.js';
 
 export async function convert(file, inputFormat, outputFormat) {
+  validateFile(file);
+  if (typeof inputFormat !== 'string' || typeof outputFormat !== 'string' || !inputFormat || !outputFormat) {
+    throw new Error('Select both input and output formats');
+  }
   if (['png', 'jpg', 'jpeg'].includes(inputFormat) && outputFormat === 'pdf') {
     return imageToPdf(file);
   }

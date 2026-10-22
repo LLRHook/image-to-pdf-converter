@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "116",
   "name": "File Format Converter",
   "version": "1.0.0",
   "description": "Convert images, documents, and spreadsheets between formats — right in your browser.",

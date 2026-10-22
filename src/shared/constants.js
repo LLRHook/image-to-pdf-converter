@@ -1,4 +1,6 @@
 export const MAX_FILE_SIZE = 16 * 1024 * 1024; // 16 MB
+export const MAX_IMAGE_PIXELS = 32_000_000;
+export const MAX_IMAGE_DIMENSION = 16_384;
 
 export const FORMAT_GROUPS = {
   document: {
