@@ -138,7 +138,9 @@ export default function App() {
   const download = () => {
     if (!result) return;
     releaseDownload();
-    const url = URL.createObjectURL(result.blob);
+    // A generic type makes every browser save the file instead of opening
+    // displayable types (Firefox would open an image/webp blob in place).
+    const url = URL.createObjectURL(new Blob([result.blob], { type: 'application/octet-stream' }));
     downloadUrl.current = url;
     const a = document.createElement('a');
     a.href = url;
@@ -201,11 +203,18 @@ export default function App() {
 
   return (
     <div className={`app${dragging ? ' dragging' : ''}`}>
+      <div className="backdrop" aria-hidden="true">
+        <i className="b1" />
+        <i className="b2" />
+        <i className="b3" />
+        <i className="b4" />
+        <i className="grain" />
+      </div>
       <header className="top">
         <div className="mark">
-          any<span>→</span>any
+          any<span>to</span>any
         </div>
-        <div className="top-note">
+        <div className="top-note glass">
           <span className="dot" /> runs on this device · nothing is uploaded
         </div>
       </header>
@@ -221,7 +230,7 @@ export default function App() {
             Images, documents, spreadsheets, audio and video, converted inside your browser. You can watch the
             file come apart into its real pieces and get put back together as the format you picked.
           </p>
-          <button className="drop" onClick={() => inputRef.current?.click()}>
+          <button className="drop glass" onClick={() => inputRef.current?.click()}>
             <span className="drop-title">Choose a file</span>
             <span className="drop-sub">or drop it anywhere · or paste</span>
           </button>
@@ -255,10 +264,10 @@ export default function App() {
           )}
 
           {picked.format && !running && !result && (
-            <div className="picker">
+            <div className="picker glass">
               <div className="picker-head">
                 <span>
-                  Convert <b>{formatInfo(picked.format).label}</b> to
+                  Convert <b className="flow-text">{formatInfo(picked.format).label}</b> to
                 </span>
                 <button className="ghost" onClick={clear}>
                   Different file
@@ -309,7 +318,7 @@ export default function App() {
           )}
 
           {running && (
-            <div className="controls">
+            <div className="controls glass">
               <Stages viz={viz!} />
               <button className="ghost" onClick={() => run.current?.cancel()}>
                 Cancel
@@ -318,7 +327,7 @@ export default function App() {
           )}
 
           {viz && !running && viz.route.hops.length > 0 && (
-            <div className="controls">
+            <div className="controls glass">
               <Stages viz={viz} />
               <div className="actions">
                 {result && (
@@ -422,15 +431,15 @@ function Privacy() {
     <div className="privacy">
       <div className="privacy-title">What happens to your file</div>
       <ul>
-        <li>
+        <li className="glass">
           <b>It stays on this device.</b> The conversion engines are WebAssembly programs that run in your
           browser. There is no server to upload to.
         </li>
-        <li>
+        <li className="glass">
           <b>The network is locked.</b> Each engine runs in a sandboxed worker that can only load this site&rsquo;s
           own engine files. The page&rsquo;s security policy blocks every other connection.
         </li>
-        <li>
+        <li className="glass">
           <b>Nothing is kept.</b> Each conversion gets a fresh worker that is shut down when it finishes. Files are
           never written to storage. Close the tab and they&rsquo;re gone.
         </li>

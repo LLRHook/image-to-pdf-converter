@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VizState } from './model';
 import { Scene, fmtBytes, type HitResult } from './scene';
-import { ROLE_COLOR, ROLE_LABEL } from './palette';
+import { DARK, LIGHT, ROLE_LABEL, currentTheme, type Theme } from './palette';
 
 /** React host for the canvas scene: sizing, the rAF loop, reduced motion, tooltips. */
 export function XRay({ state, label }: { state: VizState | null; label: string }) {
@@ -9,6 +9,7 @@ export function XRay({ state, label }: { state: VizState | null; label: string }
   const canvas = useRef<HTMLCanvasElement>(null);
   const scene = useRef<Scene | null>(null);
   const [hit, setHit] = useState<HitResult | null>(null);
+  const [theme, setTheme] = useState<Theme>(currentTheme);
 
   useEffect(() => {
     const cv = canvas.current!;
@@ -18,6 +19,13 @@ export function XRay({ state, label }: { state: VizState | null; label: string }
     scene.current = sc;
     const onMq = () => sc.setReducedMotion(mq.matches);
     mq.addEventListener('change', onMq);
+    const scheme = matchMedia('(prefers-color-scheme: dark)');
+    const onScheme = () => {
+      const th = scheme.matches ? DARK : LIGHT;
+      sc.setTheme(th);
+      setTheme(th);
+    };
+    scheme.addEventListener('change', onScheme);
 
     const size = () => {
       const w = el.clientWidth;
@@ -54,6 +62,7 @@ export function XRay({ state, label }: { state: VizState | null; label: string }
       cancelAnimationFrame(raf);
       ro.disconnect();
       mq.removeEventListener('change', onMq);
+      scheme.removeEventListener('change', onScheme);
       document.removeEventListener('visibilitychange', onVis);
       scene.current = null;
     };
@@ -69,14 +78,14 @@ export function XRay({ state, label }: { state: VizState | null; label: string }
   };
 
   return (
-    <div className="xray" ref={wrap} onPointerMove={onMove} onPointerLeave={() => setHit(null)}>
+    <div className="xray glass" ref={wrap} onPointerMove={onMove} onPointerLeave={() => setHit(null)}>
       <canvas ref={canvas} role="img" aria-label={label} />
-      {hit && <Tooltip hit={hit} />}
+      {hit && <Tooltip hit={hit} theme={theme} />}
     </div>
   );
 }
 
-function Tooltip({ hit }: { hit: HitResult }) {
+function Tooltip({ hit, theme }: { hit: HitResult; theme: Theme }) {
   const seg = hit.segment;
   const offset = seg ? seg.offset : Math.round(hit.f0 * hit.fileSize);
   const length = seg ? seg.length : Math.round((hit.f1 - hit.f0) * hit.fileSize);
@@ -85,7 +94,7 @@ function Tooltip({ hit }: { hit: HitResult }) {
   return (
     <div className="xray-tip" style={{ left, top }}>
       <div className="xray-tip-name">
-        <i style={{ background: ROLE_COLOR[hit.role] }} />
+        <i style={{ background: theme.role[hit.role] }} />
         {hit.name}
         {seg?.count && seg.count > 1 ? <span> ×{seg.count.toLocaleString()}</span> : null}
       </div>

@@ -18,7 +18,7 @@ import { formatInfo } from '../core/formats';
 import { engineName } from '../core/engineNames';
 import type { VizState, HopView, StageView } from './model';
 import { ghostFor } from './templates';
-import { ACCENT, BG, FAINT, INK, LINE, MONO, MUTED, PANEL, ROLE_COLOR, ROLE_LABEL, SERIF, rgba } from './palette';
+import { ROLE_LABEL, currentTheme, rgba, type Theme } from './palette';
 
 interface Block {
   name: string;
@@ -214,7 +214,16 @@ export class Scene {
     private canvas: HTMLCanvasElement,
     private reduced: boolean,
   ) {
-    this.ctx = canvas.getContext('2d', { alpha: false })!;
+    this.ctx = canvas.getContext('2d')!;
+  }
+
+  private th: Theme = currentTheme();
+
+  setTheme(th: Theme) {
+    if (th === this.th) return;
+    this.th = th;
+    this.bg = null;
+    this.glows.clear();
   }
 
   setReducedMotion(r: boolean) {
@@ -363,35 +372,38 @@ export class Scene {
 
   private drawBackground() {
     const c = this.ctx;
+    c.clearRect(0, 0, this.w, this.h);
     if (!this.bg) {
+      // The page behind the canvas is the sky / aurora; the canvas only adds
+      // the engine chamber as a pane of glass, cached once per size and theme.
       const bg = document.createElement('canvas');
       bg.width = this.canvas.width;
       bg.height = this.canvas.height;
       const b = bg.getContext('2d')!;
       b.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-      b.fillStyle = BG;
-      b.fillRect(0, 0, this.w, this.h);
-      // Blueprint dot grid.
-      b.fillStyle = 'rgba(236,231,221,0.055)';
-      for (let y = 12; y < this.h; y += 16) for (let x = 12; x < this.w; x += 16) b.fillRect(x, y, 1, 1);
-      // Chamber.
       const ch = this.L.chamber;
-      b.fillStyle = PANEL;
-      roundRect(b, ch.x, ch.y, ch.w, ch.h, 14);
+      const r = 22;
+      if (this.th.name === 'light') {
+        b.shadowColor = 'rgba(40,90,180,0.16)';
+        b.shadowBlur = 40;
+        b.shadowOffsetY = 18;
+      }
+      b.fillStyle = this.th.panelFill;
+      roundRect(b, ch.x, ch.y, ch.w, ch.h, r);
       b.fill();
-      b.strokeStyle = LINE;
+      b.shadowColor = 'transparent';
+      b.strokeStyle = this.th.panelStroke;
       b.lineWidth = 1;
-      roundRect(b, ch.x + 0.5, ch.y + 0.5, ch.w - 1, ch.h - 1, 14);
+      roundRect(b, ch.x + 0.5, ch.y + 0.5, ch.w - 1, ch.h - 1, r);
       b.stroke();
-      // Intake / outlet notches.
-      b.fillStyle = BG;
-      b.fillRect(ch.x + ch.w / 2 - 40, ch.y - 1, 80, 3);
-      b.fillRect(ch.x + ch.w / 2 - 40, ch.y + ch.h - 2, 80, 3);
-      b.fillStyle = FAINT;
-      b.fillRect(ch.x + ch.w / 2 - 40, ch.y, 1, 6);
-      b.fillRect(ch.x + ch.w / 2 + 39, ch.y, 1, 6);
-      b.fillRect(ch.x + ch.w / 2 - 40, ch.y + ch.h - 6, 1, 6);
-      b.fillRect(ch.x + ch.w / 2 + 39, ch.y + ch.h - 6, 1, 6);
+      // Intake and outlet: soft lights where bytes enter and leave.
+      for (const y of [ch.y, ch.y + ch.h]) {
+        const g = b.createRadialGradient(ch.x + ch.w / 2, y, 0, ch.x + ch.w / 2, y, 70);
+        g.addColorStop(0, rgba(this.th.accent, this.th.name === 'light' ? 0.18 : 0.22));
+        g.addColorStop(1, rgba(this.th.accent, 0));
+        b.fillStyle = g;
+        b.fillRect(ch.x + ch.w / 2 - 70, y - 70, 140, 140);
+      }
       this.bg = bg;
     }
     c.drawImage(this.bg, 0, 0, this.w, this.h);
@@ -424,11 +436,11 @@ export class Scene {
   ) {
     const c = this.ctx;
     const { stripX, stripW, stripH } = this.L;
-    c.fillStyle = '#16171b';
+    c.fillStyle = this.th.track;
     c.fillRect(stripX, y, stripW, stripH);
     for (const b of blocks) {
       if (b.w <= 0.01) continue;
-      const color = ROLE_COLOR[b.role];
+      const color = this.th.role[b.role];
       const w = Math.max(0.75, b.w);
       if (opts.ghost) {
         c.strokeStyle = rgba(color, 0.55 * b.alpha);
@@ -438,15 +450,20 @@ export class Scene {
         continue;
       }
       const dim = opts.dimDeparted && b.departed;
-      c.fillStyle = rgba(color, (dim ? 0.22 : b.name === 'not inspected' ? 0.18 : 0.92) * b.alpha);
-      c.fillRect(b.x, y, w, stripH);
       // Part of a large segment already consumed by a streaming engine.
       const rf = !dim && opts.readFraction ? opts.readFraction(b) : 0;
-      if (rf > 0) {
-        c.fillStyle = BG;
-        c.fillRect(b.x, y, w * rf, stripH);
+      const full = (b.name === 'not inspected' ? 0.18 : 0.92) * b.alpha;
+      if (dim) {
+        c.fillStyle = rgba(color, 0.22 * b.alpha);
+        c.fillRect(b.x, y, w, stripH);
+      } else if (rf > 0) {
         c.fillStyle = rgba(color, 0.22 * b.alpha);
         c.fillRect(b.x, y, w * rf, stripH);
+        c.fillStyle = rgba(color, full);
+        c.fillRect(b.x + w * rf, y, w * (1 - rf), stripH);
+      } else {
+        c.fillStyle = rgba(color, full);
+        c.fillRect(b.x, y, w, stripH);
       }
       if (dim) {
         c.strokeStyle = rgba(color, 0.5 * b.alpha);
@@ -461,17 +478,17 @@ export class Scene {
       c.rect(stripX, y, fw, stripH);
       c.clip();
       for (const b of blocks) {
-        c.fillStyle = rgba(ROLE_COLOR[b.role], 0.85);
+        c.fillStyle = rgba(this.th.role[b.role], 0.85);
         c.fillRect(b.x, y, Math.max(0.75, b.w), stripH);
       }
       c.restore();
     }
     // Segment separators + inline labels where they fit.
-    c.font = `500 ${this.L.compact ? 9 : 10}px ${MONO}`;
+    c.font = this.th.mono(this.L.compact ? 9 : 10, 500);
     c.textBaseline = 'middle';
     for (const b of blocks) {
       if (b.w > 3) {
-        c.fillStyle = 'rgba(12,13,15,0.55)';
+        c.fillStyle = this.th.name === 'light' ? 'rgba(255,255,255,0.9)' : 'rgba(8,8,14,0.55)';
         c.fillRect(b.x + b.w - 0.5, y, 1, stripH);
       }
       const label = b.seg?.count && b.seg.count > 1 ? `${b.name} ×${b.seg.count.toLocaleString()}` : b.name;
@@ -480,10 +497,10 @@ export class Scene {
         const read = opts.dimDeparted && (b.departed || (opts.readFraction?.(b) ?? 0) > 0.02);
         const underFill = opts.ghost && opts.fill !== undefined && b.x + 6 + tw <= stripX + stripW * opts.fill;
         c.fillStyle = underFill
-          ? 'rgba(12,13,15,0.82)'
+          ? this.th.onSegment
           : opts.ghost || read
-            ? rgba(labelColor(b.role), read ? 0.7 : 0.8)
-            : 'rgba(12,13,15,0.82)';
+            ? rgba(this.labelColor(b.role), read ? 0.7 : 0.8)
+            : this.th.onSegment;
         c.fillText(label, b.x + 6, y + stripH / 2 + 0.5);
       }
     }
@@ -493,7 +510,7 @@ export class Scene {
   private drawCallouts(blocks: Block[], stripY: number, labelY: number, above: boolean) {
     const c = this.ctx;
     const { stripH } = this.L;
-    c.font = `500 ${this.L.compact ? 9 : 10}px ${MONO}`;
+    c.font = this.th.mono(this.L.compact ? 9 : 10, 500);
     c.textBaseline = 'middle';
     // Pick the most structurally interesting thin segments. Labels in the left
     // half are packed left-to-right, labels in the right half right-to-left, so
@@ -529,7 +546,7 @@ export class Scene {
     }
     for (const { b, lx, tw } of placed) {
       const cx = b.x + b.w / 2;
-      const color = ROLE_COLOR[b.role];
+      const color = this.th.role[b.role];
       c.strokeStyle = rgba(color, 0.45 * b.alpha);
       c.beginPath();
       const y0 = above ? stripY : stripY + stripH;
@@ -538,7 +555,7 @@ export class Scene {
       c.lineTo(cx + 0.5, (y0 + y1) / 2);
       c.lineTo(lx + tw / 2 + 0.5, y1);
       c.stroke();
-      c.fillStyle = rgba(labelColor(b.role), 0.95 * b.alpha);
+      c.fillStyle = rgba(this.labelColor(b.role), 0.95 * b.alpha);
       c.fillText(b.name, lx, labelY);
     }
   }
@@ -550,16 +567,16 @@ export class Scene {
     if (!s) return;
     const info = formatInfo(s.input.format);
     c.textBaseline = 'alphabetic';
-    c.fillStyle = MUTED;
-    c.font = `500 ${L.compact ? 9 : 10}px ${MONO}`;
+    c.fillStyle = this.th.muted;
+    c.font = this.th.mono(L.compact ? 9 : 10, 500);
     c.fillText('INPUT', L.pad, L.srcTitleY - (L.compact ? 0 : 1));
     const labelW = measure(c, 'INPUT') + 12;
-    c.fillStyle = INK;
-    c.font = `${L.compact ? 17 : 21}px ${SERIF}`;
+    c.fillStyle = this.th.ink;
+    c.font = this.th.title(L.compact ? 17 : 21);
     const nameMax = L.stripW - labelW - 200;
     c.fillText(ellipsize(c, s.input.name, Math.max(80, nameMax)), L.pad + labelW, L.srcTitleY);
-    c.font = `500 ${L.compact ? 9 : 10}px ${MONO}`;
-    c.fillStyle = MUTED;
+    c.font = this.th.mono(L.compact ? 9 : 10, 500);
+    c.fillStyle = this.th.muted;
     const meta = `${info.label} · ${fmtBytes(s.input.size)}`;
     c.textAlign = 'right';
     c.fillText(meta, L.pad + L.stripW, L.srcTitleY);
@@ -567,18 +584,18 @@ export class Scene {
 
     if (!this.src.length) {
       // Structure still being parsed.
-      c.fillStyle = '#16171b';
+      c.fillStyle = this.th.track;
       c.fillRect(L.stripX, L.srcY, L.stripW, L.stripH);
       if (!this.reduced) {
         const x = L.stripX + ((this.t * 0.45) % 1) * L.stripW;
         const grad = c.createLinearGradient(x - 120, 0, x, 0);
-        grad.addColorStop(0, 'rgba(236,231,221,0)');
-        grad.addColorStop(1, 'rgba(236,231,221,0.08)');
+        grad.addColorStop(0, rgba(this.th.ink, 0));
+        grad.addColorStop(1, rgba(this.th.ink, 0.08));
         c.fillStyle = grad;
         c.fillRect(Math.max(L.stripX, x - 120), L.srcY, Math.min(120, x - L.stripX), L.stripH);
       }
-      c.fillStyle = MUTED;
-      c.font = `500 10px ${MONO}`;
+      c.fillStyle = this.th.muted;
+      c.font = this.th.mono(10, 500);
       c.textBaseline = 'middle';
       c.fillText('reading structure…', L.stripX + 8, L.srcY + L.stripH / 2);
       return;
@@ -610,18 +627,18 @@ export class Scene {
 
     c.textBaseline = 'alphabetic';
     // Title row.
-    c.fillStyle = MUTED;
-    c.font = `500 ${L.compact ? 9 : 10}px ${MONO}`;
+    c.fillStyle = this.th.muted;
+    c.font = this.th.mono(L.compact ? 9 : 10, 500);
     c.fillText('OUTPUT', L.pad, L.outTitleY);
     const labelW = measure(c, 'OUTPUT') + 12;
     const info = formatInfo(s.route.to);
-    c.fillStyle = s.output ? INK : MUTED;
-    c.font = `${L.compact ? 17 : 21}px ${SERIF}`;
+    c.fillStyle = s.output ? this.th.ink : this.th.muted;
+    c.font = this.th.title(L.compact ? 17 : 21);
     const outName = s.output?.name ?? `${info.label} · being written`;
     c.fillText(ellipsize(c, outName, Math.max(80, L.stripW - labelW - 220)), L.pad + labelW, L.outTitleY);
-    c.font = `500 ${L.compact ? 9 : 10}px ${MONO}`;
+    c.font = this.th.mono(L.compact ? 9 : 10, 500);
     c.textAlign = 'right';
-    c.fillStyle = MUTED;
+    c.fillStyle = this.th.muted;
     if (s.output) {
       const ratio = s.output.size / Math.max(1, s.input.size);
       c.fillText(`${info.label} · ${fmtBytes(s.output.size)} · ×${ratio < 0.01 ? ratio.toExponential(1) : ratio.toFixed(2)}`, L.pad + L.stripW, L.outTitleY);
@@ -635,8 +652,8 @@ export class Scene {
     if (ghost && writing && measured === null && !this.reduced) {
       const x = L.stripX + ((this.t * 0.6) % 1.3) * L.stripW;
       const grad = c.createLinearGradient(x - 160, 0, x, 0);
-      grad.addColorStop(0, 'rgba(255,181,71,0)');
-      grad.addColorStop(1, 'rgba(255,181,71,0.18)');
+      grad.addColorStop(0, rgba(this.th.accent, 0));
+      grad.addColorStop(1, rgba(this.th.accent, 0.22));
       c.fillStyle = grad;
       c.fillRect(Math.max(L.stripX, x - 160), L.outY, Math.max(0, Math.min(160, x - L.stripX, L.stripX + L.stripW - (x - 160))), L.stripH);
     }
@@ -656,11 +673,11 @@ export class Scene {
       // File inspected, no target chosen yet: show what the parser found.
       const x0 = ch.x + 20;
       c.textBaseline = 'alphabetic';
-      c.font = `${L.compact ? 24 : 32}px ${SERIF}`;
-      c.fillStyle = INK;
+      c.font = this.th.title(L.compact ? 24 : 32);
+      c.fillStyle = this.th.ink;
       c.fillText(this.srcStructure ? 'Inspected' : 'Inspecting…', x0, ch.y + (L.compact ? 50 : 60));
-      c.font = `500 ${L.compact ? 10 : 11}px ${MONO}`;
-      c.fillStyle = MUTED;
+      c.font = this.th.mono(L.compact ? 10 : 11, 500);
+      c.fillStyle = this.th.muted;
       const summary = this.srcStructure?.summary ?? 'Reading the file’s own structure';
       c.fillText(ellipsize(c, summary, ch.w - 40), x0, ch.y + (L.compact ? 72 : 84));
       if (this.srcStructure) {
@@ -673,12 +690,12 @@ export class Scene {
         if (!L.compact) this.drawManifest(this.srcStructure, ch.x + ch.w * 0.5, ch.y + 22, ch.w * 0.5 - 20, ch.h - 44);
       }
       // Output strip placeholder keeps the layout stable before a target is chosen.
-      c.strokeStyle = 'rgba(236,231,221,0.08)';
+      c.strokeStyle = rgba(this.th.ink, 0.08);
       c.setLineDash([4, 4]);
       c.strokeRect(L.stripX + 0.5, L.outY + 0.5, L.stripW - 1, L.stripH - 1);
       c.setLineDash([]);
-      c.font = `500 10px ${MONO}`;
-      c.fillStyle = FAINT;
+      c.font = this.th.mono(10, 500);
+      c.fillStyle = this.th.faint;
       c.textBaseline = 'middle';
       c.fillText('output layout appears here', L.stripX + 10, L.outY + L.stripH / 2);
       c.textBaseline = 'alphabetic';
@@ -691,23 +708,23 @@ export class Scene {
     // Header: hop chips.
     c.textBaseline = 'alphabetic';
     let x = inner.x;
-    c.font = `500 ${L.compact ? 9 : 10}px ${MONO}`;
+    c.font = this.th.mono(L.compact ? 9 : 10, 500);
     s.hops.forEach((h, i) => {
       const label = `${s.hops.length > 1 ? `${i + 1} · ` : ''}${engineName(h.engine)}  ${formatInfo(h.from).label}→${formatInfo(h.to).label}`;
       const tw = measure(c, label);
       const isActive = i === s.activeHop && s.phase === 'running';
-      c.fillStyle = h.status === 'done' ? rgba(ACCENT, 0.12) : isActive ? rgba(ACCENT, 0.2) : 'rgba(236,231,221,0.04)';
+      c.fillStyle = h.status === 'done' ? rgba(this.th.accent, 0.12) : isActive ? rgba(this.th.accent, 0.2) : rgba(this.th.ink, 0.05);
       roundRect(c, x, inner.y, tw + 20, 20, 10);
       c.fill();
-      c.fillStyle = h.status === 'failed' ? ROLE_COLOR.media : isActive || h.status === 'done' ? ACCENT : MUTED;
+      c.fillStyle = h.status === 'failed' ? this.th.danger : isActive || h.status === 'done' ? this.th.accent : this.th.muted;
       c.fillText(label, x + 10, inner.y + 14);
       x += tw + 28;
     });
 
     // Title + stage line.
     const titleY = inner.y + (L.compact ? 50 : 58);
-    c.font = `${L.compact ? 24 : 32}px ${SERIF}`;
-    c.fillStyle = INK;
+    c.font = this.th.title(L.compact ? 24 : 32);
+    c.fillStyle = this.th.ink;
     let title = engineName(hop.engine);
     let sub = '';
     if (s.phase === 'done') {
@@ -725,14 +742,14 @@ export class Scene {
       sub = 'Starting worker…';
     }
     c.fillText(title, inner.x, titleY);
-    c.font = `500 ${L.compact ? 10 : 11}px ${MONO}`;
-    c.fillStyle = s.phase === 'error' ? ROLE_COLOR.media : MUTED;
+    c.font = this.th.mono(L.compact ? 10 : 11, 500);
+    c.fillStyle = s.phase === 'error' ? this.th.danger : this.th.muted;
     c.fillText(ellipsize(c, sub, inner.w * (L.compact ? 1 : 0.5)), inner.x, titleY + 22);
 
     // Fallback notice.
     if (hop.fallbacks.length && s.phase === 'running') {
       const fb = hop.fallbacks[hop.fallbacks.length - 1]!;
-      c.fillStyle = rgba(ROLE_COLOR.palette, 0.9);
+      c.fillStyle = rgba(this.th.notice, 0.9);
       c.fillText(ellipsize(c, `${engineName(fb.fromEngine)} can't do this here → switched to ${engineName(hop.engine)}`, inner.w * 0.5), inner.x, titleY + 40);
     }
 
@@ -762,9 +779,9 @@ export class Scene {
     // Long files: show the head and the tail, which is where formats keep their structure.
     const list: (Segment | null)[] =
       segs.length <= rows ? segs : [...segs.slice(0, rows - 3), null, ...segs.slice(segs.length - 2)];
-    c.font = `500 9px ${MONO}`;
+    c.font = this.th.mono(9, 500);
     c.textBaseline = 'alphabetic';
-    c.fillStyle = FAINT;
+    c.fillStyle = this.th.faint;
     c.fillText('OFFSET', x, y + 10);
     c.fillText('SEGMENT', x + 78, y + 10);
     c.textAlign = 'right';
@@ -773,26 +790,26 @@ export class Scene {
     list.forEach((s, i) => {
       const ry = y + 28 + i * rowH;
       if (!s) {
-        c.fillStyle = FAINT;
+        c.fillStyle = this.th.faint;
         c.fillText(`⋯ ${(segs.length - rows + 1).toLocaleString()} more`, x + 78, ry);
         return;
       }
-      c.fillStyle = MUTED;
+      c.fillStyle = this.th.muted;
       c.fillText(`0x${s.offset.toString(16).toUpperCase().padStart(6, '0')}`, x, ry);
-      c.fillStyle = ROLE_COLOR[s.role];
+      c.fillStyle = this.th.role[s.role];
       c.fillRect(x + 66, ry - 7, 6, 6);
-      c.fillStyle = INK;
+      c.fillStyle = this.th.ink;
       const sizeText = s.length.toLocaleString();
       const sw = measure(c, sizeText);
       const name = `${s.name}${s.count && s.count > 1 ? ` ×${s.count}` : ''}`;
       const nameW = Math.min(measure(c, name), (w - 78 - sw) * 0.5);
       c.fillText(ellipsize(c, name, nameW + 1), x + 78, ry);
       if (s.detail) {
-        c.fillStyle = MUTED;
+        c.fillStyle = this.th.muted;
         c.fillText(ellipsize(c, s.detail, w - 78 - nameW - sw - 24), x + 78 + nameW + 10, ry);
       }
       c.textAlign = 'right';
-      c.fillStyle = MUTED;
+      c.fillStyle = this.th.muted;
       c.fillText(sizeText, x + w, ry);
       c.textAlign = 'left';
     });
@@ -804,16 +821,16 @@ export class Scene {
     const share = new Map<SegmentRole, number>();
     for (const b of this.src) share.set(b.role, (share.get(b.role) ?? 0) + (b.f1 - b.f0));
     const items = [...share.entries()].sort((a, b) => b[1] - a[1]);
-    c.font = `500 10px ${MONO}`;
+    c.font = this.th.mono(10, 500);
     let cx = x;
     for (const [role, f] of items) {
       const pct = f * 100;
       const label = `${ROLE_LABEL[role]} ${pct < 0.1 ? '<0.1' : pct.toFixed(pct < 10 ? 1 : 0)}%`;
       const tw = measure(c, label) + 22;
       if (cx + tw > x + maxW) break;
-      c.fillStyle = ROLE_COLOR[role];
+      c.fillStyle = this.th.role[role];
       c.fillRect(cx, y - 8, 8, 8);
-      c.fillStyle = MUTED;
+      c.fillStyle = this.th.muted;
       c.fillText(label, cx + 13, y);
       cx += tw;
     }
@@ -826,7 +843,7 @@ export class Scene {
       this.lastStageKey = key;
       this.shownProgress = 0;
     }
-    c.font = `500 10px ${MONO}`;
+    c.font = this.th.mono(10, 500);
     c.textBaseline = 'alphabetic';
     let measured: number | null = st.progress;
     let label: string;
@@ -838,21 +855,26 @@ export class Scene {
     } else {
       label = measured !== null ? `${Math.floor(this.shownProgress * 100)}% measured` : `running · ${fmtMs(t - (st.startedAt ?? t))}`;
     }
-    c.fillStyle = 'rgba(236,231,221,0.07)';
+    c.fillStyle = this.th.track;
     c.fillRect(x, y, w, 3);
     if (measured !== null) {
       this.shownProgress = approach(this.shownProgress, measured, dt, this.reduced ? 40 : 8);
-      c.fillStyle = ACCENT;
-      c.fillRect(x, y, w * this.shownProgress, 3);
+      const g = c.createLinearGradient(x, 0, x + w, 0);
+      g.addColorStop(0, this.th.flow[0]);
+      g.addColorStop(0.55, this.th.flow[1]);
+      g.addColorStop(1, this.th.flow[2]);
+      c.fillStyle = g;
+      roundRect(c, x, y - 0.5, Math.max(4, w * this.shownProgress), 4, 2);
+      c.fill();
     } else if (!this.reduced) {
       // Indeterminate: a travelling segment, clearly not a fill level.
       const p = (this.t * 0.7) % 1;
       const seg = w * 0.18;
       const sx = x - seg + p * (w + seg);
-      c.fillStyle = rgba(ACCENT, 0.75);
+      c.fillStyle = rgba(this.th.accent, 0.75);
       c.fillRect(Math.max(x, sx), y, Math.max(0, Math.min(seg, x + w - sx, sx + seg - x)), 3);
     }
-    c.fillStyle = MUTED;
+    c.fillStyle = this.th.muted;
     c.fillText(label, x, y + 18);
   }
 
@@ -860,17 +882,17 @@ export class Scene {
     const c = this.ctx;
     const stages = s.hops.flatMap((h) => h.stages.filter((st) => st.startedAt !== undefined && st.endedAt !== undefined));
     const total = Math.max(1, (s.endedAt ?? 0) - s.startedAt);
-    c.font = `500 10px ${MONO}`;
+    c.font = this.th.mono(10, 500);
     c.textBaseline = 'alphabetic';
     let cx = x;
-    const colors = [ACCENT, ROLE_COLOR.pixels, ROLE_COLOR.text, ROLE_COLOR.metadata, ROLE_COLOR.samples, ROLE_COLOR.index];
+    const colors = [this.th.accent, this.th.role.pixels, this.th.role.text, this.th.role.metadata, this.th.role.samples, this.th.role.index];
     stages.forEach((st, i) => {
       const sw = Math.max(2, (((st.endedAt ?? 0) - (st.startedAt ?? 0)) / total) * w);
       c.fillStyle = colors[i % colors.length]!;
       c.fillRect(cx, y, Math.min(sw, x + w - cx), 3);
       cx += sw;
     });
-    c.fillStyle = MUTED;
+    c.fillStyle = this.th.muted;
     const slowest = [...stages].sort((a, b) => (b.endedAt! - b.startedAt!) - (a.endedAt! - a.startedAt!))[0];
     c.fillText(slowest ? `longest step: ${slowest.label} · ${fmtMs(slowest.endedAt! - slowest.startedAt!)}` : '', x, y + 18);
   }
@@ -880,7 +902,7 @@ export class Scene {
     const facts = s.hops.map((h) => h.facts).filter(Boolean).at(-1) ?? null;
     const preview = s.hops.map((h) => h.preview).filter(Boolean).at(-1) ?? null;
     const labelY = r.y + r.h - 4;
-    c.font = `500 10px ${MONO}`;
+    c.font = this.th.mono(10, 500);
     c.textBaseline = 'alphabetic';
     const factLine = facts ? describeFacts(facts) : '';
     const reveal = this.reduced ? 1 : Math.min(1, (performance.now() - this.previewShownAt) / 650);
@@ -900,7 +922,7 @@ export class Scene {
       c.drawImage(this.previewCanvas, dx, dy, dw, dh);
       // Pixel grid: each cell is one real sampled pixel.
       if (scale >= 5) {
-        c.strokeStyle = 'rgba(12,13,15,0.35)';
+        c.strokeStyle = this.th.name === 'light' ? 'rgba(255,255,255,0.55)' : 'rgba(8,8,14,0.4)';
         c.lineWidth = 1;
         c.beginPath();
         for (let i = 1; i < preview.width; i++) {
@@ -915,10 +937,10 @@ export class Scene {
       }
       c.restore();
       if (!this.reduced && reveal < 1) {
-        c.fillStyle = rgba(ROLE_COLOR.pixels, 0.7);
+        c.fillStyle = rgba(this.th.role.pixels, 0.7);
         c.fillRect(dx, dy + dh * easeOut(reveal), dw, 1.5);
       }
-      c.fillStyle = MUTED;
+      c.fillStyle = this.th.muted;
       c.textAlign = 'right';
       c.fillText(`${factLine}${facts ? ' · ' : ''}${preview.width}×${preview.height} real sample`, box.x + box.w, labelY);
       c.textAlign = 'left';
@@ -937,13 +959,13 @@ export class Scene {
         c.globalAlpha = a;
         c.imageSmoothingEnabled = true;
         c.drawImage(fc, x0 + i * (fw + gap), y0, fw, fh);
-        c.fillStyle = MUTED;
-        c.font = `500 9px ${MONO}`;
+        c.fillStyle = this.th.muted;
+        c.font = this.th.mono(9, 500);
         c.fillText(fmtDuration(preview.times[i] ?? 0), x0 + i * (fw + gap), y0 + fh + 12);
         c.globalAlpha = 1;
       });
-      c.font = `500 10px ${MONO}`;
-      c.fillStyle = MUTED;
+      c.font = this.th.mono(10, 500);
+      c.fillStyle = this.th.muted;
       c.textAlign = 'right';
       c.fillText(factLine, box.x + box.w, labelY);
       c.textAlign = 'left';
@@ -953,14 +975,14 @@ export class Scene {
       const n = preview.peaks.length;
       const bw = box.w / n;
       const mid = box.y + box.h / 2;
-      c.fillStyle = rgba(ROLE_COLOR.samples, 0.9);
+      c.fillStyle = rgba(this.th.role.samples, 0.9);
       for (let i = 0; i < n; i++) {
         if (i / n > reveal) break;
         const p = preview.peaks[i] ?? 0;
         const hh = Math.max(1, p * box.h * 0.48);
         c.fillRect(box.x + i * bw, mid - hh, Math.max(1, bw - 1), hh * 2);
       }
-      c.fillStyle = MUTED;
+      c.fillStyle = this.th.muted;
       c.textAlign = 'right';
       c.fillText(factLine, box.x + box.w, labelY);
       c.textAlign = 'left';
@@ -969,19 +991,19 @@ export class Scene {
     if (preview?.kind === 'outline') {
       const lineH = 14;
       const rows = Math.min(preview.items.length, Math.floor(box.h / lineH));
-      c.font = `500 10px ${MONO}`;
+      c.font = this.th.mono(10, 500);
       for (let i = 0; i < rows; i++) {
         if (i / rows > reveal) break;
         const it = preview.items[i]!;
         const y = box.y + i * lineH + 10;
         const indent = Math.min(4, it.level) * 12;
-        const color = it.level > 0 ? ROLE_COLOR.header : ROLE_COLOR.text;
+        const color = it.level > 0 ? this.th.role.header : this.th.role.text;
         c.fillStyle = rgba(color, 0.9);
         c.fillRect(box.x + indent, y - 7, 3, 9);
-        c.fillStyle = it.level > 0 ? INK : MUTED;
+        c.fillStyle = it.level > 0 ? this.th.ink : this.th.muted;
         c.fillText(ellipsize(c, it.text, box.w - indent - 12), box.x + indent + 9, y);
       }
-      c.fillStyle = MUTED;
+      c.fillStyle = this.th.muted;
       c.textAlign = 'right';
       c.fillText(factLine, box.x + box.w, labelY);
       c.textAlign = 'left';
@@ -991,19 +1013,19 @@ export class Scene {
       const rows = preview.rows.slice(0, Math.floor(box.h / 16));
       const cols = Math.max(1, ...rows.map((r) => r.length));
       const cw = box.w / cols;
-      c.font = `500 9px ${MONO}`;
+      c.font = this.th.mono(9, 500);
       rows.forEach((row, i) => {
         if (i / rows.length > reveal) return;
         const y = box.y + i * 16;
         row.forEach((cell, j) => {
-          c.fillStyle = i === 0 ? rgba(ROLE_COLOR.header, 0.12) : 'rgba(236,231,221,0.035)';
+          c.fillStyle = i === 0 ? rgba(this.th.role.header, 0.12) : rgba(this.th.ink, 0.04);
           c.fillRect(box.x + j * cw, y, cw - 2, 14);
-          c.fillStyle = i === 0 ? ROLE_COLOR.header : INK;
+          c.fillStyle = i === 0 ? this.th.role.header : this.th.ink;
           c.fillText(ellipsize(c, cell, cw - 8), box.x + j * cw + 4, y + 10);
         });
       });
-      c.font = `500 10px ${MONO}`;
-      c.fillStyle = MUTED;
+      c.font = this.th.mono(10, 500);
+      c.fillStyle = this.th.muted;
       c.textAlign = 'right';
       c.fillText(factLine, box.x + box.w, labelY);
       c.textAlign = 'left';
@@ -1011,11 +1033,11 @@ export class Scene {
     }
     if (facts) {
       c.textAlign = 'right';
-      c.fillStyle = INK;
-      c.font = `${this.L.compact ? 22 : 30}px ${SERIF}`;
+      c.fillStyle = this.th.ink;
+      c.font = this.th.title(this.L.compact ? 22 : 30);
       c.fillText(bigFact(facts), box.x + box.w, box.y + box.h / 2 + 8);
-      c.font = `500 10px ${MONO}`;
-      c.fillStyle = MUTED;
+      c.font = this.th.mono(10, 500);
+      c.fillStyle = this.th.muted;
       c.fillText(factLine, box.x + box.w, labelY);
       c.textAlign = 'left';
       return;
@@ -1024,16 +1046,35 @@ export class Scene {
     const cx = box.x + box.w - Math.min(box.w, box.h) / 2;
     const cy = box.y + box.h / 2;
     const rad = Math.min(box.w, box.h) * 0.32;
-    const running = s.phase === 'running';
-    for (let i = 0; i < 3; i++) {
-      c.strokeStyle = rgba(i === 0 ? ACCENT : i === 1 ? ROLE_COLOR.pixels : ROLE_COLOR.text, 0.6 - i * 0.15);
-      c.lineWidth = 2;
+    const running = s.phase === 'running' && !this.reduced;
+    if (this.th.name === 'light') {
+      // A prism ring that turns only while the engine works.
+      const g = c.createConicGradient(running ? this.t * 0.8 : 0, cx, cy);
+      const stops = [this.th.role.pixels, this.th.role.style, this.th.role.header, this.th.role.records, this.th.role.pixels];
+      stops.forEach((col, i) => g.addColorStop(i / (stops.length - 1), col));
+      c.save();
+      c.shadowColor = 'rgba(110,130,255,0.35)';
+      c.shadowBlur = 30;
+      c.lineWidth = Math.max(6, rad * 0.16);
+      c.strokeStyle = g;
       c.beginPath();
-      const a0 = (running && !this.reduced ? this.t * (0.9 + i * 0.5) * (i % 2 ? -1 : 1) : 0) + i;
-      c.arc(cx, cy, rad - i * 9, a0, a0 + Math.PI * (0.9 - i * 0.2));
+      c.arc(cx, cy, rad, 0, Math.PI * 2);
       c.stroke();
+      c.restore();
+    } else {
+      // A breathing orb.
+      const breath = running ? 1 + 0.08 * Math.sin(this.t * 2) : 1;
+      const r = rad * 1.15 * breath;
+      const g = c.createRadialGradient(cx - r * 0.3, cy - r * 0.3, 0, cx, cy, r);
+      g.addColorStop(0, 'rgba(255,255,255,0.95)');
+      g.addColorStop(0.18, rgba(this.th.flow[1], 0.9));
+      g.addColorStop(0.55, rgba(this.th.flow[1], 0.35));
+      g.addColorStop(1, rgba(this.th.flow[1], 0));
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(cx, cy, r, 0, Math.PI * 2);
+      c.fill();
     }
-    c.lineWidth = 1;
     void hop;
   }
 
@@ -1103,7 +1144,7 @@ export class Scene {
         const x1 = ch.x + ch.w / 2 + (Math.random() - 0.5) * 60;
         const y1 = ch.y + 6;
         this.packets.push({
-          color: ROLE_COLOR[g.role],
+          color: this.th.role[g.role],
           x0,
           y0,
           cx: x0 + (x1 - x0) * 0.15,
@@ -1128,7 +1169,7 @@ export class Scene {
       const x0 = ch.x + ch.w / 2;
       const y0 = ch.y + ch.h - 4;
       this.packets.push({
-        color: ACCENT,
+        color: this.th.accent,
         x0,
         y0,
         cx: ch.x + ch.w + 40,
@@ -1154,13 +1195,15 @@ export class Scene {
         const y0 = ch.y + ch.h - 6;
         const x1 = L.stripX + at * L.stripW;
         const y1 = L.outY + L.stripH / 2;
-        this.packets.push({ color: ROLE_COLOR[part.role], x0, y0, cx: x1, cy: (y0 + y1) / 2 - 10, x1, y1, t0: tnow, dur: 560, w0: 6 });
+        this.packets.push({ color: this.th.role[part.role], x0, y0, cx: x1, cy: (y0 + y1) / 2 - 10, x1, y1, t0: tnow, dur: 560, w0: 6 });
       }
     }
 
     // Draw.
     c.save();
-    c.globalCompositeOperation = 'lighter';
+    const blend = this.th.additive ? 'lighter' : 'source-over';
+    c.globalCompositeOperation = blend;
+    c.lineCap = 'round';
     const alive: Packet[] = [];
     for (const p of this.packets) {
       const u = (tnow - p.t0) / p.dur;
@@ -1172,23 +1215,52 @@ export class Scene {
       const y = inv * inv * p.y0 + 2 * inv * e * p.cy + e * e * p.y1;
       const w = p.w0 * (1 - 0.6 * e);
       const a = u < 0.1 ? u / 0.1 : u > 0.85 ? (1 - u) / 0.15 : 1;
+      // Comet trail along the same curve: the flow reads as a ribbon.
+      let px = x;
+      let py = y;
+      for (let k = 1; k <= 6; k++) {
+        const ek = easeInOut(Math.max(0, u - k * 0.022));
+        const ik = 1 - ek;
+        const tx = ik * ik * p.x0 + 2 * ik * ek * p.cx + ek * ek * p.x1;
+        const ty = ik * ik * p.y0 + 2 * ik * ek * p.cy + ek * ek * p.y1;
+        c.globalAlpha = a * (0.5 - k * 0.07);
+        c.strokeStyle = p.color;
+        c.lineWidth = Math.max(1, 4.5 - k * 0.6);
+        c.beginPath();
+        c.moveTo(px, py);
+        c.lineTo(tx, ty);
+        c.stroke();
+        px = tx;
+        py = ty;
+      }
       const glow = this.glow(p.color);
-      c.globalAlpha = 0.55 * a;
-      c.drawImage(glow, x - 12, y - 12, 24, 24);
+      c.globalAlpha = (this.th.additive ? 0.55 : 0.45) * a;
+      c.drawImage(glow, x - 13, y - 13, 26, 26);
       c.globalAlpha = a;
-      c.fillStyle = p.color;
-      c.fillRect(x - w / 2, y - 2.5, w, 5);
+      c.fillStyle = this.th.additive ? p.color : '#ffffff';
+      roundRect(c, x - w / 2, y - 3, w, 6, 3);
+      c.fill();
+      if (!this.th.additive) {
+        c.strokeStyle = rgba(p.color, 0.9);
+        c.lineWidth = 1;
+        c.stroke();
+      }
       if (p.label) {
         c.globalCompositeOperation = 'source-over';
-        c.font = `500 10px ${MONO}`;
-        c.fillStyle = ACCENT;
-        c.fillText(p.label, x + 10, y + 4);
-        c.globalCompositeOperation = 'lighter';
+        c.font = this.th.mono(10, 500);
+        c.fillStyle = this.th.ink;
+        c.fillText(p.label, x + 12, y + 4);
+        c.globalCompositeOperation = blend;
       }
     }
     c.restore();
     this.packets = alive;
     void dt;
+  }
+
+  /** Neutral roles are drawn faint; their text needs a readable colour. */
+  private labelColor(role: SegmentRole): string {
+    return role === 'container' || role === 'padding' || role === 'unknown' ? this.th.muted : this.th.role[role];
   }
 
   private glow(color: string): HTMLCanvasElement {
@@ -1287,10 +1359,6 @@ function writingStage(hop: HopView): StageView | undefined {
   return undefined;
 }
 
-/** Neutral roles are drawn dark; their text needs a readable colour. */
-function labelColor(role: SegmentRole): string {
-  return role === 'container' || role === 'padding' || role === 'unknown' ? MUTED : ROLE_COLOR[role];
-}
 
 function calloutPriority(role: SegmentRole): number {
   switch (role) {
