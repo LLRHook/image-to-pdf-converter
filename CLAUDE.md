@@ -1,70 +1,38 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for agents working in this repository.
 
-## Project Overview
+## Project
 
-Chrome extension (Manifest V3) for client-side file format conversion. All conversions happen in-browser — no backend.
+Static, fully client-side any-to-any file converter (Vite 8, TypeScript 7, React 19), deployed to GitHub
+Pages. All conversion runs in Web Workers inside the user's browser. **Privacy is the product:** no
+backend, no network access except the site's own files, no persistence of user data.
 
 ## Commands
 
-All commands run from the project root:
-
-- **Dev server:** `npm run dev` (Vite dev server for UI work)
-- **Build:** `npm run build` (outputs to `dist/`)
-- **Load in Chrome:** `chrome://extensions/` → Developer mode → Load unpacked → select `dist/`
+- `npm run dev`: Vite dev server. The engine harness is at `/harness.html` (dev only).
+- `npm test`: Vitest unit tests in Node (`src/**/*.test.ts`).
+- `npm run test:e2e`: Playwright against real engines in Chromium/Firefox/WebKit (reuses a dev server on :5179).
+- `npm run typecheck`, `npm run build`.
 
 ## Architecture
 
-**Chrome Extension (Manifest V3)** — React popup, service worker, offscreen document.
+| Path | Role |
+|---|---|
+| `src/core/formats.ts` | Format catalog (ids, families, extensions, MIME types) |
+| `src/core/types.ts` | Engine contract, stage/facts/preview types, worker protocol |
+| `src/core/graph.ts`, `registry.ts` | Route planner over all engines' edges (auto-discovered) |
+| `src/core/worker.ts` | Engine host: network jail, one hop per worker |
+| `src/core/runner.ts` | Main-thread runner: fresh worker per hop, fallback on `EngineUnsupportedError` |
+| `src/core/assets.ts` | Same-origin asset fetch with byte-accurate progress (`asset-sizes.json`) |
+| `src/core/sniff.ts`, `src/core/structure/` | Format sniffing and real byte-layout parsers for the visualiser |
+| `src/engines/<id>/` | `edges.ts` (pure data) + `engine.ts` (worker side) |
+| `src/viz/` | Loading-screen model (reducer of runner events) and canvas scene |
+| `src/App.tsx` | UI shell |
 
-### Entry points
+## Rules
 
-| Entry | File | Purpose |
-|-------|------|---------|
-| Popup | `popup.html` → `src/popup/main.jsx` | React UI for file upload + conversion |
-| Service worker | `src/background/service-worker.js` | Context menus, image fetch, pdf-lib conversion |
-| Offscreen | `offscreen.html` → `src/offscreen/offscreen.js` | Canvas-based image-to-image conversion |
-
-### Component hierarchy
-
-`popup.html` → `App.jsx` → `FileUpload.jsx` (single component handles everything)
-
-### Conversion engine (`src/conversion/`)
-
-| Module | Formats | Library | DOM needed? |
-|--------|---------|---------|-------------|
-| `imageToPdf.js` | PNG/JPG → PDF | pdf-lib | No |
-| `imageToImage.js` | PNG/JPG ↔ PNG/JPG | Canvas API | Yes |
-| `textToPdf.js` | TXT → PDF | jsPDF | Yes |
-| `docxToPdf.js` | DOCX → PDF | mammoth + jsPDF | Yes |
-| `spreadsheet.js` | XLSX ↔ CSV | xlsx | No |
-| `index.js` | Unified `convert()` dispatcher | — | — |
-
-### Context menu flow
-
-1. Right-click image → "Convert image to..." → PDF/PNG/JPG
-2. Service worker fetches image, converts (pdf-lib for PDF, offscreen doc for image-to-image)
-3. Triggers `chrome.downloads.download()`
-
-### Key libraries
-
-| Library | Purpose |
-|---------|---------|
-| `pdf-lib` | PDF creation from images (no DOM) |
-| `jspdf` | PDF generation for text/DOCX |
-| `mammoth` | DOCX → HTML parsing |
-| `xlsx` | Excel/CSV read/write |
-
-### Styling
-
-Tailwind CSS utility classes inline in JSX. PostCSS configured at root.
-
-### Build system
-
-Vite with `@vitejs/plugin-react`. Multi-entry build: popup (HTML), offscreen (HTML), service worker (JS). Custom plugin copies `manifest.json` and `public/icons/` to `dist/`.
-
-### Shared utilities
-
-- `src/shared/constants.js` — Format groups, output format logic, max file size
-- `src/shared/messaging.js` — Chrome message type constants
+- Engines get wasm and fonts through Vite `?url` imports and `ctx.fetchAsset`, never from a CDN.
+- Report stages exactly as declared in `edges.ts`. Call `ctx.progress` only with measured values.
+- Never add analytics, remote fonts, third-party scripts or any storage of user files.
+- New dependencies: check the latest version, license (must be GPL-3.0-compatible) and docs first.

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- generated -->
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <title>Sample</title>
+  <defs>
+    <linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+  </defs>
+  <rect width="120" height="80" fill="url(#g)"/>
+  <g id="shapes">
+    <circle cx="30" cy="40" r="20"/>
+    <circle cx="60" cy="40" r="20"/>
+    <path d="M10 10 L50 50"/>
+  </g>
+  <text x="10" y="70">héllo wörld</text>
+</svg>
