@@ -34,10 +34,44 @@ function assetSizes(): Plugin {
   };
 }
 
+/**
+ * Content-Security-Policy for the built page (dev needs inline scripts for
+ * HMR, so this is build-only). connect-src 'self' is the key line: the page
+ * cannot send anything anywhere except this site, and only GETs of its own
+ * files happen in practice.
+ */
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "worker-src 'self' blob:",
+  "connect-src 'self' blob: data:",
+  "img-src 'self' blob: data:",
+  "media-src 'self' blob:",
+  "font-src 'self' data:",
+  "style-src 'self' 'unsafe-inline'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-src 'none'",
+].join('; ');
+
+function csp(): Plugin {
+  return {
+    name: 'csp',
+    apply: 'build',
+    transformIndexHtml(html) {
+      return html.replace('<head>', `<head>\n    <meta http-equiv="Content-Security-Policy" content="${CSP}" />`);
+    },
+  };
+}
+
+const BUILD_ID = process.env.GITHUB_SHA?.slice(0, 12) ?? Date.now().toString(36);
+
 export default defineConfig({
+  define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
   // GitHub Pages serves the site from /<repo>/. Override with BASE=/ for other hosts.
   base: process.env.BASE ?? './',
-  plugins: [react(), assetSizes()],
+  plugins: [react(), csp(), assetSizes()],
   worker: {
     format: 'es',
   },

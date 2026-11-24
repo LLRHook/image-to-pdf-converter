@@ -16,11 +16,11 @@ export interface FormatInfo {
   readonly mime: string;
 }
 
-const f = (id: string, label: string, family: Family, exts: string[], mime: string): FormatInfo => ({
+const f = <const I extends string>(id: I, label: string, family: Family, exts: string[], mime: string) => ({
   id,
   label,
   family,
-  exts,
+  exts: exts as readonly string[],
   mime,
 });
 

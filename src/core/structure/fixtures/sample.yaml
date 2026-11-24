@@ -1,0 +1,12 @@
+# config
+name: demo
+version: 3
+items:
+  - one
+  - two
+nested:
+  a: 1
+  b: 2
+text: |
+  multi
+  line
