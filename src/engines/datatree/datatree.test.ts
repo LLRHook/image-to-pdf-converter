@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import YAML from 'yaml';
 import { XMLParser } from 'fast-xml-parser';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { runEngine } from '../../core/testing';
 import type { FormatId } from '../../core/formats';
 import { expandEdges } from '../../core/graph';
 import { edges, stagesFor } from './edges';
@@ -10,9 +10,7 @@ import { analyze, outline } from './tree';
 import { xmlName } from './xmlmap';
 
 async function run(from: FormatId, to: FormatId, input: Uint8Array | string, options: Record<string, unknown> = {}) {
-  const ctx = testContext();
-  const result = await engine.convert({ input: blobOf(input), name: `in.${from}`, from, to, options }, ctx);
-  const bytes = await bytesOf(result.output);
+  const { result, ctx, bytes } = await runEngine(engine, { input, name: `in.${from}`, from, to, options });
   return { result, ctx, bytes, text: new TextDecoder().decode(bytes) };
 }
 const j = async (from: FormatId, to: FormatId, input: string) => (await run(from, to, input)).text;

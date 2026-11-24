@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { blobOf, runEngine, testContext } from '../../core/testing';
 import { EngineUnsupportedError } from '../../core/types';
 import type { FormatId } from '../../core/formats';
 import engine from './engine';
@@ -17,9 +17,7 @@ import { audioDigest, demuxInfo, ffprobeBytes } from '../ffmpeg/test-support/ver
 const fixture = (name: string) => new Uint8Array(readFileSync(fileURLToPath(new URL(`../ffmpeg/fixtures/${name}`, import.meta.url))));
 
 async function run(name: string, from: FormatId, to: FormatId) {
-  const ctx = testContext();
-  const result = await engine.convert({ input: blobOf(fixture(name)), name, from, to, options: {} }, ctx);
-  return { ctx, result, bytes: await bytesOf(result.output) };
+  return runEngine(engine, { input: fixture(name), name, from, to });
 }
 
 describe('remux without re-encoding', () => {

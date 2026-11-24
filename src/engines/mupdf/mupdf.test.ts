@@ -4,7 +4,7 @@ import * as mupdf from 'mupdf';
 import { ImageMagick, MagickFormat } from '@imagemagick/magick-wasm';
 import { expandEdges } from '../../core/graph';
 import type { FormatId } from '../../core/formats';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { blobOf, runEngine, testContext } from '../../core/testing';
 import { initMagick } from '../magick/runtime';
 import { decodePng, encodePng, hex, sampleRaster } from '../magick/test-utils';
 import { edges } from './edges';
@@ -62,9 +62,8 @@ const epub = (chapters = 2) =>
   });
 
 const run = async (from: FormatId, to: FormatId, input: Uint8Array, options: Record<string, unknown> = {}, name = `doc.${from}`) => {
-  const ctx = testContext();
-  const res = await engine.convert({ input: blobOf(input), name, from, to, options }, ctx);
-  return { res, ctx, out: await bytesOf(res.output) };
+  const { result: res, ctx, bytes: out } = await runEngine(engine, { input, name, from, to, options });
+  return { res, ctx, out };
 };
 
 const pdfText = (pdf: Uint8Array) => {

@@ -39,17 +39,14 @@ import {
 } from 'mediabunny';
 import { EngineUnsupportedError, type ConvertRequest, type ConvertResult, type Engine, type EngineContext } from '../../core/types';
 import type { FormatId } from '../../core/formats';
+import { PREVIEW_MAX_BYTES, WAVEFORM_MAX_SECONDS, shortName, thumbnailTimes } from '../shared/media';
+import { thumbnailSize } from '../shared/thumbnail';
 import {
   PREVIEW_BUDGET_MS,
-  PREVIEW_MAX_BYTES,
   PeakAccumulator,
   TARGETS,
-  WAVEFORM_MAX_SECONDS,
   channelCandidates,
-  shortName,
   supportsPair,
-  thumbnailSize,
-  thumbnailTimes,
   flacSampleFormat,
   sourceBitDepth,
   wantsCopy,
@@ -340,7 +337,7 @@ async function emitPreview(ctx: EngineContext, blob: Blob, video: boolean, durat
       const times: number[] = [];
       let width = 0;
       let height = 0;
-      for await (const wrapped of sink.canvasesAtTimestamps(thumbnailTimes(firstTs, durationS))) {
+      for await (const wrapped of sink.canvasesAtTimestamps(thumbnailTimes(durationS, 8, firstTs))) {
         if (!wrapped) continue;
         const c = wrapped.canvas;
         const g = c.getContext('2d') as OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;

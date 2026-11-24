@@ -8,12 +8,12 @@ import {
   parseProbe,
   progressFraction,
   supportsPair,
-  thumbnailSize,
-  thumbnailTimes,
   vp8Bitrate,
   waveformPeaks,
   type ProbeInfo,
 } from './plan';
+import { thumbnailTimes } from '../shared/media';
+import { thumbnailSize } from '../shared/thumbnail';
 
 const probe = (over: Partial<ProbeInfo> = {}): ProbeInfo => ({
   durationS: 10,

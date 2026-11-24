@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { blobOf, bytesOf, runEngine, testContext } from '../../core/testing';
 import type { FormatId } from '../../core/formats';
 import { EngineUnsupportedError } from '../../core/types';
 import { edges } from './edges';
@@ -12,10 +12,8 @@ const dec = new TextDecoder();
 const enc = new TextEncoder();
 
 async function run(from: FormatId, to: FormatId, text: string | Uint8Array, name = `note.${from}`) {
-  const ctx = testContext();
-  const data = typeof text === 'string' ? enc.encode(text) : text;
-  const res = await engine.convert({ input: blobOf(data), name, from, to, options: {} }, ctx);
-  return { ctx, res, out: dec.decode(await bytesOf(res.output)) };
+  const { ctx, result: res, bytes } = await runEngine(engine, { input: typeof text === 'string' ? enc.encode(text) : text, name, from, to });
+  return { ctx, res, out: dec.decode(bytes) };
 }
 
 const declared = (from: FormatId, to: FormatId) =>

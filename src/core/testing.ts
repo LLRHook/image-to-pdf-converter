@@ -5,7 +5,8 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import type { EngineContext, Facts, Preview, StageId } from './types';
+import type { FormatId } from './formats';
+import type { ConvertResult, Engine, EngineContext, Facts, Preview, StageId } from './types';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
@@ -64,4 +65,21 @@ export function blobOf(bytes: Uint8Array | string, type = ''): Blob {
 
 export async function bytesOf(output: Blob | Uint8Array): Promise<Uint8Array> {
   return output instanceof Blob ? new Uint8Array(await output.arrayBuffer()) : output;
+}
+
+export interface EngineRun {
+  ctx: RecordedContext;
+  result: ConvertResult;
+  /** The output's bytes, whether the engine returned a Blob or an array. */
+  bytes: Uint8Array;
+}
+
+/** One conversion through `engine` with a fresh recording context. */
+export async function runEngine(
+  engine: Engine,
+  req: { input: Uint8Array | string; name: string; from: FormatId; to: FormatId; options?: Record<string, unknown> },
+): Promise<EngineRun> {
+  const ctx = testContext();
+  const result = await engine.convert({ input: blobOf(req.input), name: req.name, from: req.from, to: req.to, options: req.options ?? {} }, ctx);
+  return { ctx, result, bytes: await bytesOf(result.output) };
 }

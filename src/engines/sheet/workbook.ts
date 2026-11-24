@@ -7,8 +7,9 @@
  * formatted straight from the serial number.
  */
 import * as XLSX from 'xlsx';
+import { fmtN } from '../../core/structure/text';
 import { checkOdsRepeats, isCfb, isZip, scanZip } from './guard';
-import { type Cell, type FmtNum, type Table, LIMITS, assertCells, fmtInt } from './model';
+import { type Cell, type FmtNum, type Table, LIMITS, assertCells } from './model';
 
 type Ws = XLSX.WorkSheet & { '!data'?: (XLSX.CellObject | undefined)[][] };
 
@@ -76,7 +77,7 @@ export function readWorkbook(bytes: Uint8Array, from: 'xlsx' | 'xls' | 'ods', ke
     throw friendly(e, label);
   }
   if (wb.SheetNames.length > LIMITS.sheets) {
-    throw new Error(`The workbook has ${fmtInt(wb.SheetNames.length)} sheets; at most ${LIMITS.sheets} are supported.`);
+    throw new Error(`The workbook has ${fmtN(wb.SheetNames.length)} sheets; at most ${LIMITS.sheets} are supported.`);
   }
 
   const sheets: SheetInfo[] = [];
@@ -118,10 +119,10 @@ export function readWorkbook(bytes: Uint8Array, from: 'xlsx' | 'xls' | 'ods', ke
       }
     }
     if (rows > LIMITS.rows) {
-      throw new Error(`Sheet "${name}" has more than ${fmtInt(LIMITS.rows)} rows, which is more than this converter handles.`);
+      throw new Error(`Sheet "${name}" has more than ${fmtN(LIMITS.rows)} rows, which is more than this converter handles.`);
     }
     if (cols > LIMITS.cols) {
-      throw new Error(`Sheet "${name}" has ${fmtInt(cols)} columns; at most ${fmtInt(LIMITS.cols)} are supported.`);
+      throw new Error(`Sheet "${name}" has ${fmtN(cols)} columns; at most ${fmtN(LIMITS.cols)} are supported.`);
     }
     cellBudget += dataRows * dataCols;
     assertCells(1, cellBudget, 'The workbook');
@@ -235,12 +236,12 @@ export function checkTableFits(t: Table, target: 'xlsx' | 'ods') {
   const label = target === 'xlsx' ? 'XLSX' : 'ODS';
   if (t.rows.length > LIMITS.rows) {
     throw new Error(
-      `Sheet "${t.name}" has ${fmtInt(t.rows.length)} rows; ${label} holds at most ${fmtInt(LIMITS.rows)}. Nothing was cut off: split the data or choose CSV/JSON.`,
+      `Sheet "${t.name}" has ${fmtN(t.rows.length)} rows; ${label} holds at most ${fmtN(LIMITS.rows)}. Nothing was cut off: split the data or choose CSV/JSON.`,
     );
   }
   if (t.cols > LIMITS.cols) {
     throw new Error(
-      `Sheet "${t.name}" has ${fmtInt(t.cols)} columns; ${label} holds at most ${fmtInt(LIMITS.cols)} (column XFD). Nothing was cut off: split the data or choose JSON.`,
+      `Sheet "${t.name}" has ${fmtN(t.cols)} columns; ${label} holds at most ${fmtN(LIMITS.cols)} (column XFD). Nothing was cut off: split the data or choose JSON.`,
     );
   }
 }
@@ -261,7 +262,7 @@ export function tableToWorksheet(t: Table, target: 'xlsx' | 'ods', onRows: (n: n
       if (typeof v === 'string') {
         if (target === 'xlsx' && v.length > LIMITS.xlsxCellChars) {
           throw new Error(
-            `Cell ${colName(c)}${r + 1} in "${t.name}" has ${fmtInt(v.length)} characters; XLSX cells hold at most ${fmtInt(LIMITS.xlsxCellChars)}. Nothing was cut off: choose ODS, CSV or JSON instead.`,
+            `Cell ${colName(c)}${r + 1} in "${t.name}" has ${fmtN(v.length)} characters; XLSX cells hold at most ${fmtN(LIMITS.xlsxCellChars)}. Nothing was cut off: choose ODS, CSV or JSON instead.`,
           );
         }
         out[c] = { t: 's', v };
@@ -291,7 +292,7 @@ export function tableToWorksheet(t: Table, target: 'xlsx' | 'ods', onRows: (n: n
 }
 
 export function tablesToWorkbook(tables: Table[], target: 'xlsx' | 'ods', onRows: (n: number) => void): XLSX.WorkBook {
-  if (tables.length > LIMITS.sheets) throw new Error(`There are ${fmtInt(tables.length)} sheets; at most ${LIMITS.sheets} are supported.`);
+  if (tables.length > LIMITS.sheets) throw new Error(`There are ${fmtN(tables.length)} sheets; at most ${LIMITS.sheets} are supported.`);
   const wb = XLSX.utils.book_new();
   const used = new Set<string>();
   tables.forEach((t, i) => {

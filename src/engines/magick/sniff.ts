@@ -1,10 +1,5 @@
+import { matchAscii, u16be, u16le, u32be, u32le } from '../../core/structure/util';
 import type { MagickSource } from './meta';
-
-const ascii = (b: Uint8Array, at: number, s: string) => {
-  if (b.length < at + s.length) return false;
-  for (let i = 0; i < s.length; i++) if (b[at + i] !== s.charCodeAt(i)) return false;
-  return true;
-};
 
 /**
  * Identify the image by its own magic bytes. We then force that one decoder, so
@@ -13,18 +8,18 @@ const ascii = (b: Uint8Array, at: number, s: string) => {
  */
 export function sniffImage(b: Uint8Array): MagickSource | undefined {
   if (b.length < 12) return undefined;
-  if (b[0] === 0x89 && ascii(b, 1, 'PNG\r\n')) return 'png';
+  if (b[0] === 0x89 && matchAscii(b, 1, 'PNG\r\n')) return 'png';
   if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
-  if (ascii(b, 0, 'GIF87a') || ascii(b, 0, 'GIF89a')) return 'gif';
-  if (ascii(b, 0, 'RIFF') && ascii(b, 8, 'WEBP')) return 'webp';
-  if (ascii(b, 0, 'BM')) return 'bmp';
+  if (matchAscii(b, 0, 'GIF87a') || matchAscii(b, 0, 'GIF89a')) return 'gif';
+  if (matchAscii(b, 0, 'RIFF') && matchAscii(b, 8, 'WEBP')) return 'webp';
+  if (matchAscii(b, 0, 'BM')) return 'bmp';
   // classic TIFF (42) and BigTIFF (43), either byte order
-  if ((ascii(b, 0, 'II') && (b[2] === 0x2a || b[2] === 0x2b) && b[3] === 0) || (ascii(b, 0, 'MM') && b[2] === 0 && (b[3] === 0x2a || b[3] === 0x2b))) return 'tiff';
-  if (ascii(b, 0, '8BPS')) return 'psd';
+  if ((matchAscii(b, 0, 'II') && (b[2] === 0x2a || b[2] === 0x2b) && b[3] === 0) || (matchAscii(b, 0, 'MM') && b[2] === 0 && (b[3] === 0x2a || b[3] === 0x2b))) return 'tiff';
+  if (matchAscii(b, 0, '8BPS')) return 'psd';
   if (b[0] === 0 && b[1] === 0 && b[2] === 1 && b[3] === 0 && (b[4] || b[5])) return 'ico';
   if (b[0] === 0xff && b[1] === 0x0a) return 'jxl';
-  if (b[0] === 0 && b[1] === 0 && b[2] === 0 && b[3] === 0x0c && ascii(b, 4, 'JXL ')) return 'jxl';
-  if (ascii(b, 4, 'ftyp')) {
+  if (b[0] === 0 && b[1] === 0 && b[2] === 0 && b[3] === 0x0c && matchAscii(b, 4, 'JXL ')) return 'jxl';
+  if (matchAscii(b, 4, 'ftyp')) {
     const size = Math.min(b.length, ((b[0]! << 24) | (b[1]! << 16) | (b[2]! << 8) | b[3]!) >>> 0 || 32);
     const brands: string[] = [String.fromCharCode(b[8]!, b[9]!, b[10]!, b[11]!)];
     for (let at = 16; at + 4 <= size; at += 4) brands.push(String.fromCharCode(b[at]!, b[at + 1]!, b[at + 2]!, b[at + 3]!));
@@ -43,18 +38,21 @@ export function sniffImage(b: Uint8Array): MagickSource | undefined {
  * ImageMagick allocates anything. Returns undefined when unsure.
  */
 export function peekSize(b: Uint8Array, fmt: MagickSource): { width: number; height: number } | undefined {
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  const u16 = (o: number, le = false) => (o + 2 <= b.length ? dv.getUint16(o, le) : 0);
-  const u32 = (o: number, le = false) => (o + 4 <= b.length ? dv.getUint32(o, le) : 0);
+  // Reads past the end give 0.
+  const u16 = (o: number, le = false) => (o + 2 <= b.length ? (le ? u16le : u16be)(b, o) : 0);
+  const u32 = (o: number, le = false) => (o + 4 <= b.length ? (le ? u32le : u32be)(b, o) : 0);
   switch (fmt) {
     case 'png':
-      return ascii(b, 12, 'IHDR') ? { width: u32(16), height: u32(20) } : undefined;
+      return matchAscii(b, 12, 'IHDR') ? { width: u32(16), height: u32(20) } : undefined;
     case 'gif':
       return { width: u16(6, true), height: u16(8, true) };
     case 'bmp': {
       const header = u32(14, true);
       if (header === 12) return { width: u16(18, true), height: u16(20, true) };
-      if (header >= 40) return { width: Math.abs(dv.getInt32(18, true)), height: Math.abs(dv.getInt32(22, true)) };
+      if (header >= 40) {
+        const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+        return { width: Math.abs(dv.getInt32(18, true)), height: Math.abs(dv.getInt32(22, true)) };
+      }
       return undefined;
     }
     case 'psd':

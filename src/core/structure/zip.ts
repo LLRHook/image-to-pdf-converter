@@ -1,5 +1,5 @@
 import type { Segment, SegmentRole } from './types';
-import { type Ctx, type Reader, fmtBytes, latin1, matchAscii, pushMerged, restUnknown, seg, u16le, u32le, u64le, utf8 } from './util';
+import { type Ctx, type Reader, fmtBytes, latin1, matchAscii, plural, pushMerged, restUnknown, seg, u16le, u32le, u64le, utf8 } from './util';
 
 export interface ZipEntry {
   name: string;
@@ -222,9 +222,5 @@ export async function parseZip(ctx: Ctx): Promise<void> {
   out.push(seg('End of central directory', 'trailer', dir.eocdOffset, dir.eocdLength));
 
   const label = ctx.format.toUpperCase();
-  ctx.summary = `${label} · ${plural(entries.length)} · ${fmtBytes(totalC)}${totalU !== totalC ? ` compressed → ${fmtBytes(totalU)} uncompressed` : ' stored'}`;
-}
-
-function plural(n: number): string {
-  return `${n.toLocaleString('en-US')} ${n === 1 ? 'entry' : 'entries'}`;
+  ctx.summary = `${label} · ${plural(entries.length, 'entry', 'entries')} · ${fmtBytes(totalC)}${totalU !== totalC ? ` compressed → ${fmtBytes(totalU)} uncompressed` : ' stored'}`;
 }

@@ -1,4 +1,4 @@
-import type { FormatId } from '../../core/formats';
+import { formatInfo, type FormatId } from '../../core/formats';
 import type { EdgeSpec, StageSpec } from '../../core/types';
 
 /**
@@ -18,7 +18,6 @@ import type { EdgeSpec, StageSpec } from '../../core/types';
  * named siblings / text mixed between elements.
  */
 
-const NAMES: Record<string, string> = { json: 'JSON', yaml: 'YAML', xml: 'XML' };
 const DECODE: Record<string, string> = {
   json: 'Parse JSON document',
   yaml: 'Parse YAML documents',
@@ -28,7 +27,7 @@ const ENCODE: Record<string, string> = { json: 'Write JSON text', yaml: 'Write Y
 
 export function stagesFor(from: FormatId, to: FormatId): StageSpec[] {
   const out: StageSpec[] = [
-    { id: 'read', label: `Read ${NAMES[from]} file` },
+    { id: 'read', label: `Read ${formatInfo(from).label} file` },
     { id: 'decode', label: DECODE[from]! },
   ];
   if (to === 'xml') out.push({ id: 'transform', label: 'Map data to XML elements' });

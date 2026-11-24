@@ -15,6 +15,7 @@ import {
   type IMagickImageCollection,
 } from '@imagemagick/magick-wasm';
 import { formatInfo, type FormatId } from '../../core/formats';
+import { fmtBytes } from '../../core/structure/util';
 import {
   EngineUnsupportedError,
   type ConvertRequest,
@@ -30,6 +31,7 @@ import {
   MULTI_FRAME_TARGETS,
   PDF_MAX_POINTS,
   READABLE,
+  TRANSFORM_TARGETS,
   WRITABLE,
   lossless,
   type MagickSource,
@@ -66,19 +68,7 @@ const WRITE_FORMAT: Record<MagickTarget, MagickFormat> = {
   pdf: MagickFormat.Pdf,
 };
 
-const NAME: Record<MagickSource, string> = {
-  png: 'PNG',
-  jpg: 'JPEG',
-  webp: 'WebP',
-  avif: 'AVIF',
-  jxl: 'JPEG XL',
-  gif: 'GIF',
-  tiff: 'TIFF',
-  bmp: 'BMP',
-  ico: 'ICO',
-  heic: 'HEIC',
-  psd: 'Photoshop',
-};
+const nameOf = (f: MagickSource | MagickTarget) => formatInfo(f).label;
 
 interface FrameInfo {
   width: number;
@@ -141,22 +131,18 @@ function explain(err: unknown, src: MagickSource): Error {
     );
   }
   if (/NoDecodeDelegate|DelegateLibrarySupportNotBuiltIn|MissingDelegate/i.test(raw)) {
-    return new EngineUnsupportedError(`ImageMagick cannot decode this ${NAME[src]} file (${raw.split(' @ ')[0]}).`);
+    return new EngineUnsupportedError(`ImageMagick cannot decode this ${nameOf(src)} file (${raw.split(' @ ')[0]}).`);
   }
   if (src === 'heic' || src === 'avif' || src === 'jxl') {
     // Exotic codecs live inside these containers and we cannot tell "damaged"
     // from "uses a feature this build lacks": let another engine try.
-    return new EngineUnsupportedError(`ImageMagick could not decode this ${NAME[src]} file: ${raw.split(' @ ')[0]}`);
+    return new EngineUnsupportedError(`ImageMagick could not decode this ${nameOf(src)} file: ${raw.split(' @ ')[0]}`);
   }
   if (/Corrupt|ImproperImageHeader|InsufficientImageData|NotEnoughImageData|UnexpectedEndOfFile|Invalid|truncated|premature|EOF/i.test(raw)) {
-    return new Error(`This ${NAME[src]} file looks damaged or incomplete (${raw.split(' @ ')[0]?.replace(/`'/g, '').trim()}).`);
+    return new Error(`This ${nameOf(src)} file looks damaged or incomplete (${raw.split(' @ ')[0]?.replace(/`'/g, '').trim()}).`);
   }
-  return new Error(`Could not read this ${NAME[src]} file: ${raw.split(' @ ')[0]}`);
+  return new Error(`Could not read this ${nameOf(src)} file: ${raw.split(' @ ')[0]}`);
 }
-
-const TARGET_NAME: Record<MagickTarget, string> = {
-  png: 'PNG', jpg: 'JPEG', webp: 'WebP', avif: 'AVIF', jxl: 'JPEG XL', gif: 'GIF', tiff: 'TIFF', bmp: 'BMP', ico: 'ICO', pdf: 'PDF',
-};
 
 /** Failures while preparing or writing the output. Resource exhaustion is "unsupported here", so a lighter engine may still manage it. */
 export function explainEncode(err: unknown, to: MagickTarget, pixels?: number): Error {
@@ -165,10 +151,10 @@ export function explainEncode(err: unknown, to: MagickTarget, pixels?: number): 
   if (RESOURCE_FAILURE.test(raw)) {
     const size = pixels ? ` (${mp(pixels)})` : '';
     return new EngineUnsupportedError(
-      `This image${size} is too large to write as ${TARGET_NAME[to]} in the browser. Try a smaller image or another format.`,
+      `This image${size} is too large to write as ${nameOf(to)} in the browser. Try a smaller image or another format.`,
     );
   }
-  return new Error(`Could not write ${TARGET_NAME[to]}: ${raw.split(' @ ')[0]}`);
+  return new Error(`Could not write ${nameOf(to)}: ${raw.split(' @ ')[0]}`);
 }
 
 function colorChannels(img: IMagickImage): number {
@@ -258,13 +244,13 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
 
   ctx.stage('decode');
   if (req.input.size === 0) throw new Error('The file is empty.');
-  if (req.input.size > LIMITS.maxInputBytes) throw new Error(`The file is larger than ${LIMITS.maxInputBytes / 1024 / 1024} MB.`);
+  if (req.input.size > LIMITS.maxInputBytes) throw new Error(`The file is larger than ${fmtBytes(LIMITS.maxInputBytes)}.`);
   const bytes = new Uint8Array(await req.input.arrayBuffer());
 
   // Trust the bytes over the file name; force exactly one decoder.
   const src = sniffImage(bytes);
-  if (!src) throw new Error(`This doesn't look like an image file${from ? ` (expected ${NAME[from]})` : ''}: its header is not recognised.`);
-  if (src !== from) ctx.log(`File name says ${NAME[from]} but the data is ${NAME[src]}; decoding as ${NAME[src]}.`);
+  if (!src) throw new Error(`This doesn't look like an image file${from ? ` (expected ${nameOf(from)})` : ''}: its header is not recognised.`);
+  if (src !== from) ctx.log(`File name says ${nameOf(from)} but the data is ${nameOf(src)}; decoding as ${nameOf(src)}.`);
 
   // ICO / PSD / HEIC always collapse to a single image; so do all single-frame targets.
   const keepAllFrames = MULTI_FRAME_TARGETS.has(to) && MULTI_FRAME_SOURCES.has(src);
@@ -279,7 +265,7 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
   const peek = peekSize(bytes, src);
   if (peek) checkFrame({ width: peek.width, height: peek.height, pageWidth: peek.width, pageHeight: peek.height });
 
-  let result: Uint8Array;
+  let result: Blob;
   let encodedPixels: number | undefined;
   try {
     const frames = ping(bytes, new MagickReadSettings({ format: READ_FORMAT[src] }));
@@ -324,7 +310,7 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
       preview(first, ctx);
 
       try {
-        if (to === 'jpg' || to === 'bmp' || to === 'pdf' || to === 'ico') {
+        if (TRANSFORM_TARGETS.has(to)) {
           ctx.stage('transform');
           images.forEach((img, i) => {
             if (to === 'ico') fitIcon(img);
@@ -336,9 +322,11 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
         ctx.stage('encode');
         for (const img of images) prepareEncode(img, src, to);
         const format = WRITE_FORMAT[to];
-        if (images.length === 1) return first.write(format, (d) => d.slice());
+        // `d` is a view into wasm memory, valid only inside the callback: the Blob copies it there.
+        const toBlob = (d: Uint8Array) => new Blob([d as Uint8Array<ArrayBuffer>]);
+        if (images.length === 1) return first.write(format, toBlob);
         // Collection.write takes its settings from the first image; the rest keep their own quality/density.
-        return all.write(format, (d) => d.slice());
+        return all.write(format, toBlob);
       } catch (e) {
         throw e instanceof UserError || e instanceof EngineUnsupportedError ? e : new EncodeFailure(e);
       }

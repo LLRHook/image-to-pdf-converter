@@ -14,11 +14,14 @@ function scanRows(b: Uint8Array, delim: number): { starts: number[]; fields: num
   let fieldStart = true;
   let minF = Infinity;
   let maxF = 0;
-  const endRow = (next: number): void => {
+  const pushRow = (): void => {
     starts.push(rowStart);
     fields.push(f);
     if (f < minF) minF = f;
     if (f > maxF) maxF = f;
+  };
+  const endRow = (next: number): void => {
+    pushRow();
     rowStart = next;
     f = 1;
     fieldStart = true;
@@ -43,21 +46,13 @@ function scanRows(b: Uint8Array, delim: number): { starts: number[]; fields: num
       if (i + 1 < n) endRow(i + 1);
       else {
         // final newline: close the row without opening an empty one
-        starts.push(rowStart);
-        fields.push(f);
-        if (f < minF) minF = f;
-        if (f > maxF) maxF = f;
+        pushRow();
         rowStart = n;
         f = 0;
       }
     } else fieldStart = false;
   }
-  if (rowStart < n || starts.length === 0) {
-    starts.push(rowStart);
-    fields.push(f);
-    if (f < minF) minF = f;
-    if (f > maxF) maxF = f;
-  }
+  if (rowStart < n || starts.length === 0) pushRow();
   return { starts, fields, minF: Number.isFinite(minF) ? minF : 0, maxF };
 }
 

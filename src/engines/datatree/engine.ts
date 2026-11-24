@@ -7,12 +7,11 @@
  */
 import YAML from 'yaml';
 import { formatInfo } from '../../core/formats';
+import { fmtN } from '../../core/structure/text';
 import type { ConvertRequest, ConvertResult, Engine, EngineContext } from '../../core/types';
-import { decodeText, readBlob } from './io';
+import { assertInputSize, decodeText, readBlob } from '../shared/io';
 import { LIMITS, analyze, outline, type Json } from './tree';
 import { buildXml, parseXml } from './xmlmap';
-
-const fmt = (n: number) => n.toLocaleString('en-US');
 
 function parseJson(text: string): Json {
   if (!text.trim()) throw new Error('The file is empty.');
@@ -30,7 +29,7 @@ function parseYaml(text: string, ctx: EngineContext): Json {
     uniqueKeys: true,
     prettyErrors: true,
   });
-  if (docs.length > LIMITS.yamlDocuments) throw new Error(`The YAML has more than ${fmt(LIMITS.yamlDocuments)} documents.`);
+  if (docs.length > LIMITS.yamlDocuments) throw new Error(`The YAML has more than ${fmtN(LIMITS.yamlDocuments)} documents.`);
   const values: Json[] = [];
   for (const doc of docs) {
     const err = doc.errors[0];
@@ -76,10 +75,7 @@ function decodeXml(bytes: Uint8Array): string {
 
 async function convert(req: ConvertRequest, ctx: EngineContext): Promise<ConvertResult> {
   const { from, to } = req;
-  if (req.input.size === 0) throw new Error('The file is empty.');
-  if (req.input.size > LIMITS.inputBytes) {
-    throw new Error(`The file is ${fmt(Math.round(req.input.size / 1048576))} MB; the limit for converting in the browser is ${LIMITS.inputBytes / 1048576} MB.`);
-  }
+  assertInputSize(req.input.size, LIMITS.inputBytes);
   try {
     return await run(req, ctx, from, to);
   } catch (e) {
@@ -103,7 +99,7 @@ async function run(req: ConvertRequest, ctx: EngineContext, from: string, to: st
   ctx.facts({ kind: 'tree', nodes: stats.nodes, depth: stats.depth });
   ctx.preview({ kind: 'outline', items: outline(data) });
   if (stats.unsafeInts > 0) {
-    ctx.log(`${fmt(stats.unsafeInts)} integer(s) are larger than 2^53 and may have lost precision when read.`);
+    ctx.log(`${fmtN(stats.unsafeInts)} integer(s) are larger than 2^53 and may have lost precision when read.`);
   }
 
   const info = formatInfo(to as 'json' | 'yaml' | 'xml');
@@ -117,7 +113,7 @@ async function run(req: ConvertRequest, ctx: EngineContext, from: string, to: st
       ctx.progress(Math.min(1, done / stats.nodes));
     });
     if (built.wrapped) ctx.log(`The data has no single top-level key, so it is wrapped in <${built.root}>.`);
-    if (built.renamed > 0) ctx.log(`${fmt(built.renamed)} key(s) were renamed to valid XML names.`);
+    if (built.renamed > 0) ctx.log(`${fmtN(built.renamed)} key(s) were renamed to valid XML names.`);
     ctx.stage('encode');
     text = built.xml;
   } else if (to === 'yaml') {

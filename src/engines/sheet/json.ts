@@ -10,7 +10,8 @@
  *   scalar                    value    -> one sheet with one cell
  * A nested object/array inside a cell is stored as compact JSON text.
  */
-import { type Cell, type Table, LIMITS, assertCells, cellJson, cellText, fmtInt } from './model';
+import { fmtN } from '../../core/structure/text';
+import { type Cell, type Table, LIMITS, assertCells, cellJson, cellText } from './model';
 
 type Json = unknown;
 const isRecord = (v: Json): v is Record<string, Json> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -99,7 +100,7 @@ export function jsonToTables(value: Json, onRows: (n: number) => void): Table[] 
     const entries = Object.entries(value);
     if (entries.length > 0 && entries.every(([, v]) => Array.isArray(v))) {
       if (entries.length > LIMITS.sheets) {
-        throw new Error(`The JSON object has ${fmtInt(entries.length)} sheets (keys); at most ${LIMITS.sheets} are supported.`);
+        throw new Error(`The JSON object has ${fmtN(entries.length)} sheets (keys); at most ${LIMITS.sheets} are supported.`);
       }
       tables = entries.map(([name, v]) => arrayToTable(name, v as Json[], onRows));
     } else {

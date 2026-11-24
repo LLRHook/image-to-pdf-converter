@@ -1,5 +1,5 @@
 import type { Segment } from './types';
-import { type Ctx, EMPTY, fmtBytes, seg, utf8 } from './util';
+import { type Ctx, EMPTY, cleanText, fmtBytes, seg, utf8 } from './util';
 
 /** Read the whole file (up to the budget). Anything beyond is reported by tailBeyond(). */
 export async function readText(ctx: Ctx): Promise<Uint8Array> {
@@ -82,11 +82,9 @@ export function countWords(b: Uint8Array, from: number, to: number): number {
   return words;
 }
 
+/** Bytes from..to as one clean line of at most `max` characters (reads at most 4 bytes per character). */
 export function decode(b: Uint8Array, from: number, to: number, max = 60): string {
-  const s = utf8(b.subarray(from, Math.min(to, from + max * 4)));
-  // eslint-disable-next-line no-control-regex
-  const t = s.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+  return cleanText(utf8(b.subarray(from, Math.min(to, from + max * 4))), max);
 }
 
 /** Split `n` units into at most `max` contiguous groups: returns [firstIndex, lastIndexExclusive] pairs. */

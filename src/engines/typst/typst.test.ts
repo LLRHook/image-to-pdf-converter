@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as mupdf from 'mupdf';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { blobOf, runEngine, testContext } from '../../core/testing';
 import type { FormatId } from '../../core/formats';
 import { PANDOC_SOURCES } from '../pandoc/spec';
 import { SAMPLE_PNG, buildSources, fixturePandoc } from '../pandoc/fixtures';
@@ -19,9 +19,8 @@ beforeAll(async () => {
 });
 
 async function run(from: FormatId, data: Uint8Array | string, name = `report.${from}`) {
-  const ctx = testContext();
-  const res = await engine.convert({ input: blobOf(data), name, from, to: 'pdf', options: {} }, ctx);
-  return { ctx, res, pdf: await bytesOf(res.output) };
+  const { ctx, result: res, bytes: pdf } = await runEngine(engine, { input: data, name, from, to: 'pdf' });
+  return { ctx, res, pdf };
 }
 
 function open(pdf: Uint8Array) {

@@ -10,15 +10,15 @@
  */
 import { zipSync } from 'fflate';
 import { formatInfo, type FormatId } from '../../core/formats';
+import { fmtN } from '../../core/structure/text';
 import type { ConvertRequest, ConvertResult, Engine, EngineContext } from '../../core/types';
+import { assertInputSize, decodeText, readBlob } from '../shared/io';
 import { DELIM, parseDelimited, serializeDelimited } from './csv';
-import { decodeText, readBlob } from './io';
 import { jsonToTables, jsonWorkUnits, tablesToJsonParts } from './json';
 import {
   type Cell,
   type Table,
   LIMITS,
-  fmtInt,
   inferCell,
   previewGrid,
   tableIsEmpty,
@@ -86,12 +86,7 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
   const toBook = to === 'xlsx' || to === 'ods';
   const opts = parseOptions(req.options);
 
-  if (req.input.size === 0) throw new Error('The file is empty.');
-  if (req.input.size > LIMITS.inputBytes) {
-    throw new Error(
-      `The file is ${fmtInt(Math.round(req.input.size / 1048576))} MB; the limit for converting in the browser is ${LIMITS.inputBytes / 1048576} MB.`,
-    );
-  }
+  assertInputSize(req.input.size, LIMITS.inputBytes);
 
   try {
     return await run(req, ctx, from, to, fromKind, toBook, opts);
@@ -135,7 +130,7 @@ async function run(
     const head: Table = sheetToTable({ ...first, dataRows: Math.min(first.dataRows, 12) }, book.date1904, () => {});
     ctx.preview({ kind: 'grid', rows: previewGrid(head) });
     if (book.formulaWithoutValue > 0) {
-      ctx.log(`${fmtInt(book.formulaWithoutValue)} formula cell(s) have no saved result in the file, so they have no value.`);
+      ctx.log(`${fmtN(book.formulaWithoutValue)} formula cell(s) have no saved result in the file, so they have no value.`);
     }
   } else if (fromKind === 'text') {
     const { text, encoding } = decodeText(bytes);

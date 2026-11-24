@@ -22,6 +22,13 @@ export function formatBytes(n: number): string {
   return `${n} B`;
 }
 
+/** The input-size check every document engine runs first. */
+export function assertDocumentSize(size: number): void {
+  if (size > LIMITS.inputBytes) {
+    throw new Error(`This file is ${formatBytes(size)}; the limit for document conversion is ${formatBytes(LIMITS.inputBytes)}.`);
+  }
+}
+
 /**
  * Markdown readers are quadratic (or worse) in the number of `_` / `*` delimiter runs inside one
  * whitespace-free word. Measured on one core: marked, `a_` x 10k = 0.8 s, x 40k = 10 s; pandoc-wasm,

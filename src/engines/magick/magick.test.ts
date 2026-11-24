@@ -11,7 +11,7 @@ import * as mupdf from 'mupdf';
 import { expandEdges } from '../../core/graph';
 import { formatInfo, type FormatId } from '../../core/formats';
 import { EngineUnsupportedError, type ConvertResult } from '../../core/types';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { blobOf, runEngine, testContext } from '../../core/testing';
 import { edges } from './edges';
 import engine, { explainEncode } from './engine';
 import { initMagick } from './runtime';
@@ -48,9 +48,8 @@ const MAGIC: Record<string, (b: Uint8Array) => boolean> = {
 };
 
 const run = async (from: FormatId, to: FormatId, input: Uint8Array, name = `in.${from}`) => {
-  const ctx = testContext();
-  const res = await engine.convert({ input: blobOf(input), name, from, to, options: {} }, ctx);
-  return { res, ctx, out: await bytesOf(res.output) };
+  const { result: res, ctx, bytes: out } = await runEngine(engine, { input, name, from, to });
+  return { res, ctx, out };
 };
 
 /** Decode any raster output with ImageMagick (ICO needs its format hint). */

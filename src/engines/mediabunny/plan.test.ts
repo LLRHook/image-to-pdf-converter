@@ -7,10 +7,10 @@ import {
   channelCandidates,
   mediabunnyStages,
   supportsPair,
-  thumbnailSize,
-  thumbnailTimes,
   wantsCopy,
 } from './plan';
+import { thumbnailTimes } from '../shared/media';
+import { thumbnailSize } from '../shared/thumbnail';
 
 const hops = expandEdges(edges.map((e) => ({ ...e, engine: 'mediabunny' })));
 const has = (f: string, t: string) => hops.some((h) => h.from === f && h.to === t);
@@ -81,9 +81,9 @@ describe('codec policy', () => {
 
 describe('preview helpers', () => {
   it('thumbnail times are evenly spaced from the first timestamp', () => {
-    expect(thumbnailTimes(0, 8)).toEqual([0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]);
-    expect(thumbnailTimes(10, 2, 4)).toEqual([10.25, 10.75, 11.25, 11.75]);
-    expect(thumbnailTimes(0, 0.1)).toHaveLength(1);
+    expect(thumbnailTimes(8)).toEqual([0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]);
+    expect(thumbnailTimes(2, 4, 10)).toEqual([10.25, 10.75, 11.25, 11.75]);
+    expect(thumbnailTimes(0.1)).toHaveLength(1);
     expect(thumbnailSize(1920, 1080)).toEqual({ width: 96, height: 54 });
     expect(thumbnailSize(64, 64)).toEqual({ width: 64, height: 64 });
   });

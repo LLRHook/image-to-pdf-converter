@@ -9,7 +9,8 @@
  * expansion, which SheetJS would otherwise materialise cell by cell.
  */
 import { Unzip, UnzipInflate, UnzipPassThrough, type UnzipFile } from 'fflate';
-import { LIMITS, fmtInt } from './model';
+import { fmtN } from '../../core/structure/text';
+import { LIMITS } from './model';
 
 export const isZip = (b: Uint8Array) => b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && (b[2] === 3 || b[2] === 5);
 export const isCfb = (b: Uint8Array) =>
@@ -44,7 +45,7 @@ export function scanZip(
   opts: { wantContentXml?: boolean; limits?: Partial<ZipLimits> } = {},
 ): ZipScan {
   const lim: ZipLimits = { total: LIMITS.zipTotalBytes, entry: LIMITS.zipEntryBytes, entries: LIMITS.zipEntries, ...opts.limits };
-  const tooMany = `The file contains more than ${fmtInt(lim.entries)} internal parts, which looks like a decompression bomb.`;
+  const tooMany = `The file contains more than ${fmtN(lim.entries)} internal parts, which looks like a decompression bomb.`;
   const declared = declaredEntries(bytes);
   if (declared !== null && declared > lim.entries) throw new Error(tooMany);
   let total = 0;
@@ -74,7 +75,7 @@ export function scanZip(
       entryBytes += chunk.length;
       total += chunk.length;
       if (entryBytes > lim.entry || total > lim.total) {
-        failure = `The file expands to more than ${fmtInt(Math.round(lim.total / 1048576))} MB when unpacked, which is too large to convert in the browser.`;
+        failure = `The file expands to more than ${fmtN(Math.round(lim.total / 1048576))} MB when unpacked, which is too large to convert in the browser.`;
         file.terminate();
         return;
       }
@@ -128,7 +129,7 @@ export function checkOdsRepeats(contentXml: string): void {
       cells += (Number(colRep.exec(t)?.[1] ?? 1) || 1) * rep;
       if (cells > LIMITS.cells) {
         throw new Error(
-          `The spreadsheet repeats cells to more than ${fmtInt(LIMITS.cells)} entries (number-rows-repeated / number-columns-repeated), which is too large to convert in the browser.`,
+          `The spreadsheet repeats cells to more than ${fmtN(LIMITS.cells)} entries (number-rows-repeated / number-columns-repeated), which is too large to convert in the browser.`,
         );
       }
     }

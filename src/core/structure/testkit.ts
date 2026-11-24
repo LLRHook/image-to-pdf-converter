@@ -5,6 +5,9 @@ import type { FormatId } from '../formats';
 import { parseStructure } from './index';
 import { structureViolations } from './invariants';
 import { bytesSource, type ByteSource, type FileStructure } from './types';
+import { concat } from './util';
+
+export { concat };
 
 const DIR = fileURLToPath(new URL('./fixtures/', import.meta.url));
 
@@ -79,16 +82,6 @@ export class Bytes {
   done(): Uint8Array {
     return Uint8Array.from(this.parts);
   }
-}
-
-export function concat(...arrays: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(arrays.reduce((a, b) => a + b.length, 0));
-  let o = 0;
-  for (const a of arrays) {
-    out.set(a, o);
-    o += a.length;
-  }
-  return out;
 }
 
 /** Deterministic PRNG for reproducible fuzzing. */

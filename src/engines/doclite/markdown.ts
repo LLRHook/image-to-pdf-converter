@@ -1,6 +1,6 @@
 /** Plain text -> Markdown, and the Markdown token helpers. Pure string code: no DOM. */
 import type { Token, Tokens } from 'marked';
-import { isPreformatted, paragraphsOf, truncate } from '../pandoc/text';
+import { countWords, isPreformatted, paragraphsOf, truncate } from '../pandoc/text';
 
 /** Escape one line of plain text so Markdown shows it literally. */
 export function escapeMarkdownLine(line: string): string {
@@ -85,7 +85,6 @@ export interface MarkdownStats {
 /** Count what the Markdown really contains and sample its first ~40 blocks. Iterative: hostile nesting is safe. */
 export function markdownStats(tokens: Token[], maxOutline = 40): MarkdownStats {
   const s: MarkdownStats = { blocks: 0, headings: 0, images: 0, tables: 0, words: 0, outline: [] };
-  const words = (t: string) => (t.match(/\S+/g) ?? []).length;
   const stack: Token[] = [];
   for (let i = tokens.length - 1; i >= 0; i--) stack.push(tokens[i]!);
   const outline = (level: number, text: string) => {
@@ -106,7 +105,7 @@ export function markdownStats(tokens: Token[], maxOutline = 40): MarkdownStats {
         const h = t as Tokens.Heading;
         s.blocks++;
         s.headings++;
-        s.words += words(inlineText(h.tokens));
+        s.words += countWords(inlineText(h.tokens));
         countImages(h.tokens);
         outline(h.depth, inlineText(h.tokens));
         break;
@@ -116,7 +115,7 @@ export function markdownStats(tokens: Token[], maxOutline = 40): MarkdownStats {
         const p = t as Tokens.Paragraph;
         s.blocks++;
         const text = inlineText(p.tokens ?? [{ type: 'text', raw: p.text, text: p.text } as Tokens.Text]);
-        s.words += words(text);
+        s.words += countWords(text);
         countImages(p.tokens);
         outline(0, text);
         break;
@@ -124,7 +123,7 @@ export function markdownStats(tokens: Token[], maxOutline = 40): MarkdownStats {
       case 'code': {
         const c = t as Tokens.Code;
         s.blocks++;
-        s.words += words(c.text);
+        s.words += countWords(c.text);
         outline(0, c.text.split('\n', 1)[0] || '(code block)');
         break;
       }
@@ -133,7 +132,7 @@ export function markdownStats(tokens: Token[], maxOutline = 40): MarkdownStats {
         s.blocks++;
         s.tables++;
         for (const cell of [...tb.header, ...tb.rows.flat()]) {
-          s.words += words(inlineText(cell.tokens));
+          s.words += countWords(inlineText(cell.tokens));
           countImages(cell.tokens);
         }
         outline(0, `Table: ${tb.rows.length + 1} rows × ${tb.header.length} columns`);

@@ -3,14 +3,9 @@
  * it reports, and the exact ffmpeg argument lists for each conversion.
  * No library imports, so edges.ts can use it on the main thread.
  */
-import type { FormatId } from '../../core/formats';
+import { formatInfo, type FormatId } from '../../core/formats';
 import type { StageId, StageSpec } from '../../core/types';
-
-export const VIDEO_FORMATS = ['mp4', 'webm', 'mov', 'mkv'] as const;
-export const AUDIO_FORMATS = ['mp3', 'wav', 'flac', 'ogg', 'm4a'] as const;
-
-const isVideo = (f: string) => (VIDEO_FORMATS as readonly string[]).includes(f);
-const isAudio = (f: string) => (AUDIO_FORMATS as readonly string[]).includes(f);
+import { AUDIO_FORMATS, VIDEO_FORMATS, isAudio, isVideo, shortName } from '../shared/media';
 
 /** All formats this engine reads. */
 export const READS: readonly FormatId[] = [...VIDEO_FORMATS, ...AUDIO_FORMATS, 'gif'];
@@ -36,25 +31,8 @@ export const MAX_PCM_OUTPUT_BYTES = 1.2 * 1024 ** 3;
 export const GIF_MAX_SECONDS = 300;
 export const GIF_DEFAULT_FPS = 15;
 export const GIF_DEFAULT_WIDTH = 640;
-/** Previews are skipped above this input size: they cost an extra decode. */
-export const PREVIEW_MAX_BYTES = 200 * 1024 ** 2;
-export const WAVEFORM_MAX_SECONDS = 1800;
 
 /* ------------------------------------------------------------------ labels */
-
-const SHORT: Record<string, string> = {
-  mp4: 'MP4',
-  webm: 'WebM',
-  mov: 'MOV',
-  mkv: 'MKV',
-  mp3: 'MP3',
-  wav: 'WAV',
-  flac: 'FLAC',
-  ogg: 'Ogg',
-  m4a: 'M4A',
-  gif: 'GIF',
-};
-export const shortName = (f: string) => SHORT[f] ?? f.toUpperCase();
 
 /** What the encoder stage actually produces, as shown to the user. */
 export function targetDescription(to: FormatId): string {
@@ -276,7 +254,7 @@ export function buildPlan(from: FormatId, to: FormatId, input: string, probe: Pr
   // the same wasm instance, so -stats must be explicit: an earlier -nostats (previews) would stick.
   const base = ['-hide_banner', '-stats', '-stats_period', '0.25', '-loglevel', 'warning'];
   const head = [...base, ...INPUT_GUARD, '-i', input];
-  const info = formatTargets[to] ?? { ext: to, mime: 'application/octet-stream' };
+  const info = formatInfo(to);
 
   if (to === 'gif') {
     const fps = Math.min(options.gifFps ?? GIF_DEFAULT_FPS, probe.video?.fps ?? GIF_DEFAULT_FPS, 60);
@@ -325,7 +303,7 @@ export function buildPlan(from: FormatId, to: FormatId, input: string, probe: Pr
     passes: [{ stage: 'encode', measured: true, args: [...head, ...args, output] }],
     output,
     scratch: [],
-    ext: info.ext,
+    ext: info.exts[0]!,
     mime: info.mime,
     summary: targetDescription(to),
   });
@@ -375,19 +353,6 @@ export function buildPlan(from: FormatId, to: FormatId, input: string, probe: Pr
   }
 }
 
-const formatTargets: Record<string, { ext: string; mime: string }> = {
-  mp4: { ext: 'mp4', mime: 'video/mp4' },
-  webm: { ext: 'webm', mime: 'video/webm' },
-  mov: { ext: 'mov', mime: 'video/quicktime' },
-  mkv: { ext: 'mkv', mime: 'video/x-matroska' },
-  mp3: { ext: 'mp3', mime: 'audio/mpeg' },
-  wav: { ext: 'wav', mime: 'audio/wav' },
-  flac: { ext: 'flac', mime: 'audio/flac' },
-  ogg: { ext: 'ogg', mime: 'audio/ogg' },
-  m4a: { ext: 'm4a', mime: 'audio/mp4' },
-  gif: { ext: 'gif', mime: 'image/gif' },
-};
-
 /** Fraction of the conversion done, from ffmpeg's reported output time. Null when not measurable. */
 export function progressFraction(timeUs: number, durationS: number | null): number | null {
   if (durationS === null || durationS <= 0 || !Number.isFinite(timeUs) || timeUs < 0) return null;
@@ -395,18 +360,6 @@ export function progressFraction(timeUs: number, durationS: number | null): numb
   // The very first callback of a run can carry an unset timestamp (~1.5e12 us): not a measurement.
   if (t > durationS * 1.5 + 2) return null;
   return Math.min(1, t / durationS);
-}
-
-/** Make the thumbnail time list: `count` evenly spaced timestamps through the duration. */
-export function thumbnailTimes(durationS: number, count: number): number[] {
-  const n = Math.max(1, Math.min(count, Math.floor(durationS * 4) || 1));
-  return Array.from({ length: n }, (_, i) => (durationS * (i + 0.5)) / n);
-}
-
-/** Fit a frame into a box with the longer side at `max`, even-or-odd, never zero. */
-export function thumbnailSize(width: number, height: number, max = 96): { width: number; height: number } {
-  const s = Math.min(1, max / Math.max(width, height));
-  return { width: Math.max(1, Math.round(width * s)), height: Math.max(1, Math.round(height * s)) };
 }
 
 /** Reduce signed 16-bit mono PCM to `buckets` peak values, 0..1, scaled so the loudest bucket is 1. */

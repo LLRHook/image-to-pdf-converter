@@ -152,7 +152,6 @@ export const u32be = (b: Uint8Array, o: number): number =>
   (((b[o] ?? 0) << 24) | ((b[o + 1] ?? 0) << 16) | ((b[o + 2] ?? 0) << 8) | (b[o + 3] ?? 0)) >>> 0;
 export const u32le = (b: Uint8Array, o: number): number =>
   (((b[o + 3] ?? 0) << 24) | ((b[o + 2] ?? 0) << 16) | ((b[o + 1] ?? 0) << 8) | (b[o] ?? 0)) >>> 0;
-export const i32be = (b: Uint8Array, o: number): number => u32be(b, o) | 0;
 export const i32le = (b: Uint8Array, o: number): number => u32le(b, o) | 0;
 /** 64-bit values as doubles; anything above 2^53 collapses to Infinity so callers reject it. */
 export const u64be = (b: Uint8Array, o: number): number => {
@@ -191,6 +190,17 @@ export function latin1(b: Uint8Array): string {
   let s = '';
   for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i] ?? 0);
   return s;
+}
+
+/** The arrays joined end to end, in a new array. */
+export function concat(...arrays: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(arrays.reduce((a, b) => a + b.length, 0));
+  let o = 0;
+  for (const a of arrays) {
+    out.set(a, o);
+    o += a.length;
+  }
+  return out;
 }
 
 /** First index of `needle` (ASCII) at or after `from`, or -1. */
@@ -253,8 +263,6 @@ export function fmtChannels(n: number): string {
   if (n === 2) return 'stereo';
   return `${n} ch`;
 }
-
-export const fmtDims = (w: number, h: number): string => `${w}×${h}`;
 
 export function plural(n: number, one: string, many = one + 's'): string {
   return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;

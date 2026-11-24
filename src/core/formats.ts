@@ -84,10 +84,6 @@ export function formatInfo(id: FormatId): FormatInfo {
   return info;
 }
 
-export function isFormatId(id: string): id is FormatId {
-  return BY_ID.has(id);
-}
-
 export function formatFromExtension(filename: string): FormatId | undefined {
   const dot = filename.lastIndexOf('.');
   if (dot < 0) return undefined;

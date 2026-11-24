@@ -2,6 +2,8 @@
  * Box-filtered thumbnail built from rows, so a 100-megapixel image is never
  * cloned or fully copied out of wasm memory just to draw a 96 px preview.
  */
+import { THUMB_SIDE, thumbnailSize } from '../shared/thumbnail';
+
 export interface Thumb {
   width: number;
   height: number;
@@ -12,10 +14,8 @@ export interface Thumb {
  * @param row returns the RGBA bytes (width*4) of source row y. May return a view
  *            that is only valid until the next call.
  */
-export function thumbFromRows(width: number, height: number, row: (y: number) => ArrayLike<number>, maxSide = 96): Thumb {
-  const scale = Math.min(1, maxSide / Math.max(width, height));
-  const tw = Math.max(1, Math.round(width * scale));
-  const th = Math.max(1, Math.round(height * scale));
+export function thumbFromRows(width: number, height: number, row: (y: number) => ArrayLike<number>, maxSide = THUMB_SIDE): Thumb {
+  const { width: tw, height: th } = thumbnailSize(width, height, maxSide);
   const out = new Uint8ClampedArray(tw * th * 4);
   const cellW = width / tw;
   const cellH = height / th;

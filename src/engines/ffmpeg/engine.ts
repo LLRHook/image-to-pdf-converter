@@ -12,8 +12,7 @@
  */
 import createFFmpegCore, { type FFmpegCore } from '@ffmpeg/core';
 import wasmUrl from '@ffmpeg/core/wasm?url';
-import { formatInfo } from '../../core/formats';
-import type { FormatId } from '../../core/formats';
+import { formatInfo, type FormatId } from '../../core/formats';
 import {
   EngineUnsupportedError,
   type ConvertRequest,
@@ -21,11 +20,11 @@ import {
   type Engine,
   type EngineContext,
 } from '../../core/types';
+import { PREVIEW_MAX_BYTES, WAVEFORM_MAX_SECONDS, isVideo, shortName, thumbnailTimes } from '../shared/media';
+import { thumbnailSize } from '../shared/thumbnail';
 import {
   FORMAT_WHITELIST,
   MAX_INPUT_BYTES,
-  PREVIEW_MAX_BYTES,
-  WAVEFORM_MAX_SECONDS,
   WORK_DIR,
   buildPlan,
   checkLimits,
@@ -33,10 +32,7 @@ import {
   explainFailure,
   parseProbe,
   progressFraction,
-  shortName,
   supportsPair,
-  thumbnailSize,
-  thumbnailTimes,
   waveformPeaks,
   type Options,
   type ProbeInfo,
@@ -143,7 +139,7 @@ const engine: Engine = {
       checkLimits(from, to, probe, options);
       ctx.log(`FFmpeg input: ${probe.formatName}, video ${probe.video?.codec ?? '-'}, audio ${probe.audio?.codec ?? '-'}`);
 
-      const wantsVideo = to === 'gif' || formatInfo(to).family === 'video';
+      const wantsVideo = to === 'gif' || isVideo(to);
       emitFacts(ctx, probe, wantsVideo);
 
       if (input.size <= PREVIEW_MAX_BYTES) {
@@ -243,7 +239,7 @@ async function previewFrames(core: FFmpegCore, ctx: EngineContext, inPath: strin
   scratch.push(out);
   const frames: Uint8ClampedArray[] = [];
   const times: number[] = [];
-  for (const t of thumbnailTimes(probe.durationS!, 8)) {
+  for (const t of thumbnailTimes(probe.durationS!)) {
     safeRm(core, out);
     const ret = core.exec(
       ...QUIET, '-ss', t.toFixed(3), '-i', inPath, '-an', '-sn', '-dn', '-frames:v', '1',

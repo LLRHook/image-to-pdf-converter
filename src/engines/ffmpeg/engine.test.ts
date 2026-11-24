@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
-import type { ConvertRequest, Engine } from '../../core/types';
+import { blobOf, runEngine, testContext } from '../../core/testing';
+import type { Engine } from '../../core/types';
 import type { FormatId } from '../../core/formats';
 import { edges } from './edges';
 import { expandEdges } from '../../core/graph';
@@ -20,10 +20,7 @@ beforeAll(async () => {
 });
 
 async function run(name: string, from: FormatId, to: FormatId, options: Record<string, unknown> = {}) {
-  const ctx = testContext();
-  const req: ConvertRequest = { input: blobOf(fixture(name)), name, from, to, options };
-  const result = await engine.convert(req, ctx);
-  return { ctx, result, bytes: await bytesOf(result.output) };
+  return runEngine(engine, { input: fixture(name), name, from, to, options });
 }
 
 describe('edges', () => {

@@ -14,14 +14,15 @@ import pandocWasmUrl from '../../../node_modules/pandoc-wasm/src/pandoc.wasm?url
 import { zipSync, type Zippable } from 'fflate';
 import type { FormatId } from '../../core/formats';
 import { formatInfo } from '../../core/formats';
-import type { EngineContext } from '../../core/types';
+import type { ConvertRequest, EngineContext } from '../../core/types';
 import {
   analyze, decodeDataImage, hasTitle, imageNodes, imageUrl, lookupMedia, replaceImageWithAlt, sanitizeAst, setImageUrl, textToAst,
   type Analysis, type AstNode, type PandocAst,
 } from './ast';
-import { LIMITS, assertMarkdownTractable, formatBytes } from './limits';
+import { assertContainer } from './container';
+import { LIMITS, assertDocumentSize, assertMarkdownTractable, formatBytes } from './limits';
 import { fixRtfUnicodeSkip } from './rtf';
-import { BUNDLE_TARGETS } from './spec';
+import { BUNDLE_TARGETS, DOC_NAMES } from './spec';
 import { HTML_CSP, decodeText } from './text';
 
 export type { PandocInstance };
@@ -109,11 +110,50 @@ async function apiVersionOf(p: PandocInstance): Promise<number[]> {
 
 const EXT_FOR_INPUT: Partial<Record<FormatId, string>> = { tex: 'tex', md: 'md', html: 'html', docx: 'docx', odt: 'odt', rtf: 'rtf', epub: 'epub' };
 
+export interface DocumentInput {
+  bytes: Uint8Array;
+  from: FormatId;
+  label: string;
+  /** The same bytes as a Blob (the request's input), handed to pandoc as is instead of a copy. */
+  blob?: Blob;
+  /** Markdown already decoded and checked by assertMarkdownTractable, so it is not done twice. */
+  text?: string;
+}
+
+/**
+ * Checks every pandoc-backed engine runs before downloading any wasm: input size,
+ * the container really being what it claims, and Markdown that would hang the reader.
+ */
+export async function prepareDocument(req: ConvertRequest): Promise<DocumentInput> {
+  const { from } = req;
+  assertDocumentSize(req.input.size);
+  const bytes = new Uint8Array(await req.input.arrayBuffer());
+  assertContainer(from, bytes);
+  let text: string | undefined;
+  if (from === 'md') {
+    text = decodeText(bytes).text;
+    assertMarkdownTractable(text);
+  }
+  return { bytes, from, label: DOC_NAMES[from] ?? from, blob: req.input, text };
+}
+
+/** pandoc's first few warnings, into the job log. */
+export function logPandocWarnings(ctx: EngineContext, warnings: readonly string[]): void {
+  for (const w of warnings.slice(0, 5)) ctx.log(`pandoc: ${w}`);
+}
+
+/** The decode stage of the pandoc-backed engines: read the document, then report its facts, outline and warnings. */
+export async function decodeDocument(p: PandocInstance, input: DocumentInput, ctx: EngineContext): Promise<ReadResult> {
+  ctx.stage('decode');
+  const read = await readDocument(p, input);
+  ctx.facts(read.analysis.facts);
+  ctx.preview(read.analysis.outline);
+  logPandocWarnings(ctx, read.warnings);
+  return read;
+}
+
 /** Run the reader and return the AST plus the images it extracted. */
-export async function readDocument(
-  p: PandocInstance,
-  input: { bytes: Uint8Array; from: FormatId; label: string },
-): Promise<ReadResult> {
+export async function readDocument(p: PandocInstance, input: DocumentInput): Promise<ReadResult> {
   const { from, bytes } = input;
   let ast: PandocAst;
   let warnings: string[] = [];
@@ -126,10 +166,15 @@ export async function readDocument(
     if (!reader) throw new Error(`No pandoc reader for ${from}`);
     const name = `in.${EXT_FOR_INPUT[from] ?? 'bin'}`;
     const textual = from === 'md' || from === 'html' || from === 'tex';
-    const data: Blob | string = textual
-      ? decodeText(bytes).text
-      : new Blob([(from === 'rtf' ? fixRtfUnicodeSkip(bytes) : bytes) as Uint8Array<ArrayBuffer>]);
-    if (from === 'md') assertMarkdownTractable(data as string);
+    let data: Blob | string;
+    if (textual) {
+      data = input.text ?? decodeText(bytes).text;
+      if (from === 'md' && input.text === undefined) assertMarkdownTractable(data);
+    } else if (from === 'rtf') {
+      data = new Blob([fixRtfUnicodeSkip(bytes) as Uint8Array<ArrayBuffer>]);
+    } else {
+      data = input.blob ?? new Blob([bytes as Uint8Array<ArrayBuffer>]);
+    }
     // Containers carry their images inside; plain-text formats reference them (or embed data: URIs, handled below).
     const container = !textual;
     const opts: Record<string, unknown> = { from: reader, to: 'json', 'input-files': [name] };

@@ -1,8 +1,10 @@
 /**
  * Test-only helpers (Node). The PNG codec here is independent of ImageMagick so
  * engine output can be verified without trusting the engine's own decoder.
+ * No Vitest imports: Playwright specs and fixtures use it too.
  */
 import { unzlibSync, zlibSync } from 'fflate';
+import { concat } from '../../core/structure/util';
 
 export interface Raster {
   width: number;
@@ -88,6 +90,13 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
   return out;
 }
 
+const PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+/** A PNG file: the signature, then each [type, data] chunk in order (length and CRC added), then IEND. */
+export function pngFile(chunks: ReadonlyArray<readonly [type: string, data: Uint8Array]>): Uint8Array {
+  return concat(PNG_SIGNATURE, ...chunks.map(([type, data]) => chunk(type, data)), chunk('IEND', new Uint8Array(0)));
+}
+
 /** 8-bit RGBA PNG encoder (filter 0). */
 export function encodePng(r: Raster): Uint8Array {
   const ihdr = new Uint8Array(13);
@@ -98,19 +107,10 @@ export function encodePng(r: Raster): Uint8Array {
   ihdr[9] = 6;
   const raw = new Uint8Array((r.width * 4 + 1) * r.height);
   for (let y = 0; y < r.height; y++) raw.set(r.rgba.subarray(y * r.width * 4, (y + 1) * r.width * 4), y * (r.width * 4 + 1) + 1);
-  const parts = [
-    Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    chunk('IHDR', ihdr),
-    chunk('IDAT', zlibSync(raw)),
-    chunk('IEND', new Uint8Array(0)),
-  ];
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let o = 0;
-  for (const p of parts) {
-    out.set(p, o);
-    o += p.length;
-  }
-  return out;
+  return pngFile([
+    ['IHDR', ihdr],
+    ['IDAT', zlibSync(raw)],
+  ]);
 }
 
 /** 8-bit PNG decoder (gray, RGB, palette, gray+alpha, RGBA; all five filters). Throws on anything else. */
@@ -267,14 +267,10 @@ export function bombPng(width: number, height: number): Uint8Array {
   dv.setUint32(4, height);
   ihdr[8] = 8;
   ihdr[9] = 0; // 8-bit gray
-  const parts = [Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlibSync(new Uint8Array(1000))), chunk('IEND', new Uint8Array(0))];
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let o = 0;
-  for (const p of parts) {
-    out.set(p, o);
-    o += p.length;
-  }
-  return out;
+  return pngFile([
+    ['IHDR', ihdr],
+    ['IDAT', zlibSync(new Uint8Array(1000))],
+  ]);
 }
 
 export const hex = (b: Uint8Array, n = 8) => Buffer.from(b.subarray(0, n)).toString('hex');

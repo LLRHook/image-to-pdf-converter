@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { unzipSync } from 'fflate';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { blobOf, bytesOf, runEngine, testContext } from '../../core/testing';
 import type { FormatId } from '../../core/formats';
 import type { ConvertResult } from '../../core/types';
 import { PANDOC_SOURCES, PANDOC_TARGETS } from './spec';
@@ -23,8 +23,7 @@ beforeAll(async () => {
 });
 
 async function run(from: FormatId, to: FormatId, data: Uint8Array, name = `report.${from}`) {
-  const ctx = testContext();
-  const res = await engine.convert({ input: blobOf(data), name, from, to, options: {} }, ctx);
+  const { result: res, ctx } = await runEngine(engine, { input: data, name, from, to });
   return { res, ctx };
 }
 

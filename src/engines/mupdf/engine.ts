@@ -4,7 +4,10 @@ import type * as MuPdf from 'mupdf';
 // `exports` map does not expose the wasm file. Vite emits it as a hashed asset.
 import wasmUrl from '../../../node_modules/mupdf/dist/mupdf-wasm.wasm?url';
 import { formatInfo, type FormatId } from '../../core/formats';
+import { fmtBytes } from '../../core/structure/util';
 import type { ConvertRequest, ConvertResult, Engine, EngineContext } from '../../core/types';
+import { HTML_CSP, escapeHtml } from '../pandoc/text';
+import { thumbnailScale } from '../shared/thumbnail';
 import {
   DEFAULT_DPI,
   EPUB_PAGE,
@@ -45,15 +48,11 @@ function loadMupdf(ctx: EngineContext): Promise<Mupdf> {
   return mupdfReady;
 }
 
-const MAGIC: Record<string, string> = { pdf: 'application/pdf', epub: 'application/epub+zip' };
-
 const fileBase = (name: string) => {
   const dot = name.lastIndexOf('.');
   const base = (dot > 0 ? name.slice(0, dot) : name).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').trim();
   return (base || 'document').slice(0, 100);
 };
-
-const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 function explain(err: unknown, from: FormatId): Error {
   if (err instanceof Error && (err as Error & { userFacing?: boolean }).userFacing) return err;
@@ -123,7 +122,7 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
 
   ctx.stage('decode');
   if (req.input.size === 0) throw new Error('The file is empty.');
-  if (req.input.size > MAX_INPUT_BYTES) throw new Error(`The file is larger than ${MAX_INPUT_BYTES / 1024 / 1024} MB.`);
+  if (req.input.size > MAX_INPUT_BYTES) throw new Error(`The file is larger than ${fmtBytes(MAX_INPUT_BYTES)}.`);
   const bytes = new Uint8Array(await req.input.arrayBuffer());
   // mupdf sniffs content and would happily open images, XPS, HTML... as "documents". Only take what was promised.
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, 1024));
@@ -134,7 +133,7 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
   const info = formatInfo(to);
   let doc: InstanceType<Mupdf['Document']> | undefined;
   try {
-    doc = mupdf.Document.openDocument(bytes, MAGIC[from]);
+    doc = mupdf.Document.openDocument(bytes, formatInfo(from).mime);
     if (from === 'epub' && doc.isPDF()) throw userError('This file is not an EPUB.');
     if (doc.needsPassword()) {
       const pw = typeof req.options.password === 'string' ? req.options.password : '';
@@ -152,7 +151,7 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
     const pageH = y1 - y0;
     ctx.facts({ kind: 'pages', pages: count, width: Math.round(pageW), height: Math.round(pageH) });
     {
-      const k = Math.min(1, 96 / Math.max(pageW, pageH));
+      const k = thumbnailScale(pageW, pageH);
       const pix = first.toPixmap(mupdf.Matrix.scale(k, k), mupdf.ColorSpace.DeviceRGB, false, true);
       const w = pix.getWidth();
       const h = pix.getHeight();
@@ -204,7 +203,7 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
         if (!parts.some((p) => /<span/.test(p))) throw userError('No selectable text was found. This looks like a scan or image-only document, and OCR is not available.');
         const title = doc.getMetaData('info:Title') || base;
         text =
-          `<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>\n` +
+          `<!DOCTYPE html>\n<html><head><meta charset="utf-8">${HTML_CSP}<title>${escapeHtml(title)}</title>\n` +
           `<style>body{margin:0;background:#888}div[id^=page]{position:relative;margin:12px auto;background:#fff;overflow:hidden}p{position:absolute;margin:0;white-space:pre}</style></head>\n` +
           `<body>\n${parts.join('\n')}\n</body></html>\n`;
       }
@@ -225,7 +224,8 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
         done(i);
       }
       writer.close();
-      const out = buf.asUint8Array().slice();
+      // The Blob copies the bytes out of wasm memory before the buffer is freed.
+      const out = new Blob([buf.asUint8Array() as Uint8Array<ArrayBuffer>]);
       writer.destroy();
       buf.destroy();
       return { output: out, ext: info.exts[0]!, mime: info.mime };
@@ -260,7 +260,7 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
       }
       page.destroy();
       held += data.length;
-      if (held > MAX_OUTPUT_BYTES) throw userError(`The pages add up to more than ${MAX_OUTPUT_BYTES / 1024 / 1024} MB. Try a lower DPI or convert fewer pages.`);
+      if (held > MAX_OUTPUT_BYTES) throw userError(`The pages add up to more than ${fmtBytes(MAX_OUTPUT_BYTES)}. Try a lower DPI or convert fewer pages.`);
       const name = `${base}-${pageNo(i)}.${info.exts[0]}`;
       if (zip) zip.add(name, data, to === 'svg');
       else files.push({ name, data });

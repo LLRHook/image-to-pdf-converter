@@ -1,7 +1,7 @@
 import { Marked, type Token, type Tokens } from 'marked';
 import { formatInfo } from '../../core/formats';
 import { EngineUnsupportedError, type ConvertRequest, type ConvertResult, type Engine, type EngineContext } from '../../core/types';
-import { LIMITS, assertMarkdownTractable, formatBytes } from '../pandoc/limits';
+import { assertDocumentSize, assertMarkdownTractable, formatBytes } from '../pandoc/limits';
 import { HTML_CSP, baseNameOf, decodeText, escapeHtml, isPreformatted, paragraphsOf, splitLines, truncate } from '../pandoc/text';
 import { inlineText, markdownStats, textToMarkdown } from './markdown';
 import { markdownToText } from './plaintext';
@@ -58,9 +58,7 @@ ${body}
 }
 
 function guard(req: ConvertRequest): void {
-  if (req.input.size > LIMITS.inputBytes) {
-    throw new Error(`This file is ${formatBytes(req.input.size)}; the limit for document conversion is ${formatBytes(LIMITS.inputBytes)}.`);
-  }
+  assertDocumentSize(req.input.size);
   if (req.from === 'md' && req.input.size > MAX_MARKDOWN_BYTES) {
     throw new EngineUnsupportedError(`Markdown over ${formatBytes(MAX_MARKDOWN_BYTES)} goes to the full converter.`);
   }

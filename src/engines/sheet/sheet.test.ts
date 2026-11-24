@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { runEngine, testContext } from '../../core/testing';
 import type { FormatId } from '../../core/formats';
 import { expandEdges } from '../../core/graph';
 import { edges, stagesFor } from './edges';
@@ -12,12 +12,7 @@ import { inferCell, LIMITS } from './model';
 /* ------------------------------------------------------------------ helpers */
 
 async function run(from: FormatId, to: FormatId, input: Uint8Array | string, options: Record<string, unknown> = {}) {
-  const ctx = testContext();
-  const result = await engine.convert(
-    { input: blobOf(input), name: `input.${from}`, from, to, options },
-    ctx,
-  );
-  const bytes = await bytesOf(result.output);
+  const { result, ctx, bytes } = await runEngine(engine, { input, name: `input.${from}`, from, to, options });
   return { result, ctx, bytes, text: () => new TextDecoder().decode(bytes) };
 }
 

@@ -1,5 +1,6 @@
 import Papa from 'papaparse';
-import { type Cell, type Table, LIMITS, assertCells, cellText, fmtInt } from './model';
+import { fmtN } from '../../core/structure/text';
+import { type Cell, type Table, LIMITS, assertCells, cellText } from './model';
 
 export const DELIM = { csv: ',', tsv: '\t' } as const;
 
@@ -33,12 +34,12 @@ export function parseDelimited(
         rows.push(r);
       }
       if (limits.rows && rows.length > limits.rows) {
-        error = `The file has more than ${fmtInt(limits.rows)} rows, which ${limits.target ?? 'the target format'} cannot hold. Nothing was cut off: choose CSV or JSON, or split the file.`;
+        error = `The file has more than ${fmtN(limits.rows)} rows, which ${limits.target ?? 'the target format'} cannot hold. Nothing was cut off: choose CSV or JSON, or split the file.`;
         parser.abort();
         return;
       }
       if (widestRow > 0 && rows.length * widestRow > LIMITS.cells) {
-        error = `The file is too large to convert in the browser (more than ${fmtInt(LIMITS.cells)} cells).`;
+        error = `The file is too large to convert in the browser (more than ${fmtN(LIMITS.cells)} cells).`;
         parser.abort();
         return;
       }

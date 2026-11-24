@@ -1,7 +1,7 @@
 /** Documents NOT written by pandoc: the readers must cope with what Word, LibreOffice and EPUB tools produce. */
 import { describe, expect, it } from 'vitest';
 import { unzipSync } from 'fflate';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { runEngine } from '../../core/testing';
 import type { FormatId } from '../../core/formats';
 import engine from './engine';
 import {
@@ -24,9 +24,8 @@ const SOURCES: Record<string, { data: Uint8Array; image: boolean; table: boolean
 };
 
 async function run(from: FormatId, to: FormatId, data: Uint8Array) {
-  const ctx = testContext();
-  const res = await engine.convert({ input: blobOf(data), name: `foreign.${from}`, from, to, options: {} }, ctx);
-  return { ctx, res, bytes: await bytesOf(res.output) };
+  const { ctx, result: res, bytes } = await runEngine(engine, { input: data, name: `foreign.${from}`, from, to });
+  return { ctx, res, bytes };
 }
 
 describe.each(Object.entries(SOURCES))('foreign %s', (from, spec) => {

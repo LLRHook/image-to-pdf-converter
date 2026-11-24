@@ -1,4 +1,17 @@
+/** Input reading shared by the sheet and datatree engines. */
+import { fmtN } from '../../core/structure/text';
+import { fmtBytes } from '../../core/structure/util';
 import type { EngineContext } from '../../core/types';
+
+/** Rejects an empty input or one larger than `limitBytes`, before anything is read. */
+export function assertInputSize(size: number, limitBytes: number): void {
+  if (size === 0) throw new Error('The file is empty.');
+  if (size > limitBytes) {
+    throw new Error(
+      `The file is ${fmtN(Math.round(size / 1048576))} MB; the limit for converting in the browser is ${fmtBytes(limitBytes)}.`,
+    );
+  }
+}
 
 /** Read a Blob fully, reporting measured progress (bytes read / bytes total). */
 export async function readBlob(blob: Blob, ctx: Pick<EngineContext, 'progress'>): Promise<Uint8Array> {

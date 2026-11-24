@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { expandEdges } from '../../core/graph';
-import { blobOf, bytesOf, testContext } from '../../core/testing';
+import { runEngine, testContext } from '../../core/testing';
 import { decodePng, encodePng, solidRaster } from '../magick/test-utils';
 import { edges } from './edges';
 import engine from './engine';
@@ -12,9 +12,8 @@ const svg = (body: string, w: string | number = 100, h: string | number = 50, ex
   `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" ${extra}>${body}</svg>`;
 
 const run = async (text: string) => {
-  const ctx = testContext();
-  const res = await engine.convert({ input: blobOf(text), name: 'a.svg', from: 'svg', to: 'png', options: {} }, ctx);
-  return { res, ctx, png: decodePng(await bytesOf(res.output)), bytes: await bytesOf(res.output) };
+  const { result: res, ctx, bytes } = await runEngine(engine, { input: text, name: 'a.svg', from: 'svg', to: 'png' });
+  return { res, ctx, png: decodePng(bytes), bytes };
 };
 const px = (r: { width: number; rgba: Uint8Array }, x: number, y: number) => Array.from(r.rgba.slice((y * r.width + x) * 4, (y * r.width + x) * 4 + 4));
 

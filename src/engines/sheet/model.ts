@@ -3,6 +3,7 @@
  * named tables of typed cells) that every reader produces and every writer
  * consumes, plus the hard limits applied to hostile input.
  */
+import { fmtN } from '../../core/structure/text';
 
 /** A number whose text had trailing decimal zeros ("1.50"): keeps its display format in XLSX/ODS. */
 export interface FmtNum {
@@ -34,8 +35,6 @@ export const LIMITS = {
   zipEntryBytes: 400 * 1024 * 1024,
   zipEntries: 2_000,
 } as const;
-
-export const fmtInt = (n: number) => n.toLocaleString('en-US');
 
 export function cellText(c: Cell): string {
   if (c === null) return '';
@@ -96,17 +95,10 @@ export function inferCell(s: string, keepFmt: boolean): Cell {
   return s;
 }
 
-/** Column count of a table, ignoring trailing completely empty columns is NOT done: we never drop data. */
-export function widest(rows: readonly (readonly unknown[])[]): number {
-  let w = 0;
-  for (const r of rows) if (r.length > w) w = r.length;
-  return w;
-}
-
 export function assertCells(rows: number, cols: number, what: string) {
   if (rows * cols > LIMITS.cells) {
     throw new Error(
-      `${what} is too large to convert in the browser (${fmtInt(rows)} rows x ${fmtInt(cols)} columns; the limit is ${fmtInt(LIMITS.cells)} cells).`,
+      `${what} is too large to convert in the browser (${fmtN(rows)} rows x ${fmtN(cols)} columns; the limit is ${fmtN(LIMITS.cells)} cells).`,
     );
   }
 }

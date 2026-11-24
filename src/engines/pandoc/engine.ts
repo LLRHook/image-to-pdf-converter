@@ -1,35 +1,25 @@
-import { formatInfo, outputName, type FormatId } from '../../core/formats';
+import { formatInfo, outputName } from '../../core/formats';
 import type { ConvertRequest, ConvertResult, Engine, EngineContext } from '../../core/types';
-import { assertContainer } from './container';
-import { LIMITS, assertMarkdownTractable, formatBytes } from './limits';
-import { bundleZip, isDocumentTarget, loadPandoc, readDocument, writeDocument, canBundle } from './pandoc';
-import { DOC_NAMES } from './spec';
-import { baseNameOf, decodeText } from './text';
+import {
+  bundleZip, canBundle, decodeDocument, isDocumentTarget, loadPandoc, logPandocWarnings, prepareDocument, writeDocument,
+} from './pandoc';
+import { baseNameOf } from './text';
 
 async function convert(req: ConvertRequest, ctx: EngineContext): Promise<ConvertResult> {
-  const { from, to } = req;
+  const { to } = req;
   if (!isDocumentTarget(to)) throw new Error(`pandoc cannot write ${to}`);
-  if (req.input.size > LIMITS.inputBytes) {
-    throw new Error(`This file is ${formatBytes(req.input.size)}; the limit for document conversion is ${formatBytes(LIMITS.inputBytes)}.`);
-  }
-  const bytes = new Uint8Array(await req.input.arrayBuffer());
   // Fail on the wrong kind of file before downloading 16 MB of wasm.
-  assertContainer(from, bytes);
-  if (from === 'md') assertMarkdownTractable(decodeText(bytes).text);
+  const input = await prepareDocument(req);
 
   ctx.stage('load');
   const pandoc = await loadPandoc(ctx);
 
-  ctx.stage('decode');
-  const read = await readDocument(pandoc, { bytes, from, label: DOC_NAMES[from as FormatId] ?? from });
-  ctx.facts(read.analysis.facts);
-  ctx.preview(read.analysis.outline);
-  for (const w of read.warnings.slice(0, 5)) ctx.log(`pandoc: ${w}`);
+  const read = await decodeDocument(pandoc, input, ctx);
 
   ctx.stage('encode');
   const title = baseNameOf(req.name);
   const written = await writeDocument(pandoc, read, to, { title });
-  for (const w of written.warnings.slice(0, 5)) ctx.log(`pandoc: ${w}`);
+  logPandocWarnings(ctx, written.warnings);
 
   const info = formatInfo(to);
   if (canBundle(to)) {

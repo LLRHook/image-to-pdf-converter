@@ -5,7 +5,7 @@
  * levels deep and must not overflow the stack.
  */
 import type { Facts, Preview } from '../../core/types';
-import { isPreformatted, paragraphsOf, truncate } from './text';
+import { countWords, isPreformatted, paragraphsOf, truncate } from './text';
 
 export interface PandocAst {
   'pandoc-api-version': number[];
@@ -91,7 +91,6 @@ export function analyze(ast: PandocAst): Analysis {
   let tables = 0;
   let words = 0;
   let inWord = false;
-  const tokens = (s: string) => (s.match(/\S+/g) ?? []).length;
   walk(ast.blocks, (n) => {
     if (BLOCK_TAGS.has(n.t)) {
       blocks++;
@@ -119,11 +118,11 @@ export function analyze(ast: PandocAst): Analysis {
         inWord = false;
         break;
       case 'Code':
-        words += tokens((n.c as [unknown, string])[1]);
+        words += countWords((n.c as [unknown, string])[1]);
         inWord = false;
         return false;
       case 'CodeBlock':
-        words += tokens((n.c as [unknown, string])[1]);
+        words += countWords((n.c as [unknown, string])[1]);
         return false;
       case 'Math':
         words++;

@@ -1,4 +1,5 @@
 import type { EdgeSpec } from '../../core/types';
+import { isVideo } from '../shared/media';
 import { READS, WRITES, mediabunnyStages, supportsPair } from './plan';
 
 const LOSSLESS_TARGETS = new Set<string>(['wav', 'flac']);
@@ -20,8 +21,7 @@ export const edges: EdgeSpec[] = [
     fidelity: (_from, to) => (LOSSLESS_TARGETS.has(to) ? 'lossless' : 'lossy'),
     stages: mediabunnyStages,
     note: (from, to) => {
-      const video = ['mp4', 'webm', 'mov', 'mkv'];
-      if (video.includes(from) && video.includes(to)) return 'Tracks the new container can hold are copied without re-encoding.';
+      if (isVideo(from) && isVideo(to)) return 'Tracks the new container can hold are copied without re-encoding.';
       return undefined;
     },
   },

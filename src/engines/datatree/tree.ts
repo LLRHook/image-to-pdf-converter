@@ -3,6 +3,9 @@
  * size, cycles, values JSON cannot hold) and the preview outline. All
  * iterative so hostile nesting cannot overflow the stack.
  */
+import { fmtN } from '../../core/structure/text';
+import { truncate } from '../pandoc/text';
+
 export const LIMITS = {
   inputBytes: 64 * 1024 * 1024,
   depth: 256,
@@ -23,8 +26,6 @@ export interface TreeStats {
   unsafeInts: number;
 }
 
-const fmt = (n: number) => n.toLocaleString('en-US');
-
 /** Validate and measure. Throws a readable error for anything that cannot be converted safely. */
 export function analyze(root: Json): TreeStats {
   let nodes = 0;
@@ -44,7 +45,7 @@ export function analyze(root: Json): TreeStats {
       continue;
     }
     nodes++;
-    if (nodes > LIMITS.nodes) throw new Error(`The data has more than ${fmt(LIMITS.nodes)} values, which is too large to convert in the browser.`);
+    if (nodes > LIMITS.nodes) throw new Error(`The data has more than ${fmtN(LIMITS.nodes)} values, which is too large to convert in the browser.`);
     if (level > depth) depth = level;
     if (depth > LIMITS.depth) throw new Error(`The data is nested more than ${LIMITS.depth} levels deep, which is not supported.`);
     if (typeof v === 'number') {
@@ -71,17 +72,12 @@ export function analyze(root: Json): TreeStats {
 }
 /* ----------------------------------------------------------------- outline */
 
-const clip = (s: string, n = 80) => {
-  const one = s.replace(/\s+/g, ' ').trim();
-  return one.length > n ? one.slice(0, n - 1) + '…' : one;
-};
-
 function describe(key: string | null, v: Json): string {
   const prefix = key === null ? '' : `${key}`;
-  if (Array.isArray(v)) return `${prefix}${prefix ? ' ' : ''}[${fmt(v.length)} ${v.length === 1 ? 'item' : 'items'}]`;
+  if (Array.isArray(v)) return `${prefix}${prefix ? ' ' : ''}[${fmtN(v.length)} ${v.length === 1 ? 'item' : 'items'}]`;
   if (isObj(v)) {
     const n = Object.keys(v).length;
-    return `${prefix}${prefix ? ' ' : ''}{${fmt(n)} ${n === 1 ? 'key' : 'keys'}}`;
+    return `${prefix}${prefix ? ' ' : ''}{${fmtN(n)} ${n === 1 ? 'key' : 'keys'}}`;
   }
   const text = v === null ? 'null' : typeof v === 'string' ? JSON.stringify(v) : String(v);
   return prefix ? `${prefix}: ${text}` : text;
@@ -99,7 +95,7 @@ export function outline(root: Json, max = 40): OutlineItem[] {
     Array.isArray(v) ? v.map((x, i) => [`[${i}]`, x]) : isObj(v) ? Object.entries(v) : [];
   const visit = (key: string | null, v: Json, level: number, breadth: number) => {
     if (out.length >= max) return;
-    out.push({ level, text: clip(describe(key, v)) });
+    out.push({ level, text: truncate(describe(key, v), 80) });
     if (level >= 2) return;
     const kids = entries(v);
     for (let i = 0; i < kids.length && i < breadth; i++) visit(kids[i]![0], kids[i]![1], level + 1, 4);
@@ -107,7 +103,7 @@ export function outline(root: Json, max = 40): OutlineItem[] {
   if (Array.isArray(root) || isObj(root)) {
     const top = entries(root);
     for (let i = 0; i < top.length && i < 12; i++) visit(top[i]![0], top[i]![1], 0, 4);
-    if (top.length > 12 && out.length < max) out.push({ level: 0, text: `… ${fmt(top.length - 12)} more` });
+    if (top.length > 12 && out.length < max) out.push({ level: 0, text: `… ${fmtN(top.length - 12)} more` });
   } else {
     visit(null, root, 0, 0);
   }
