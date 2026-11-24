@@ -1,0 +1,3 @@
+# Keep LF in every checkout, even with core.autocrlf=true (Git for Windows):
+# the structure parsers and their fixtures depend on exact bytes.
+* text=auto eol=lf
