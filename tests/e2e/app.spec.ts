@@ -76,10 +76,12 @@ test('PNG → WebP in the real app: output is valid, no off-origin traffic, smoo
   // Report the frame budget; fail only on real jank (headless browsers vary).
   const p95 = pct(frames, 0.95);
   test.info().annotations.push({ type: 'frames', description: `n=${frames.length} p50=${pct(frames, 0.5).toFixed(1)}ms p95=${p95.toFixed(1)}ms max=${Math.max(...frames).toFixed(1)}ms` });
-  // Frame timing is only meaningful on a quiet machine: parallel browsers on
-  // the dev server, or headless Firefox (software compositing), add noise.
-  // Run with FRAME_CHECK=1 and --workers=1 to enforce the budget. Measured on
-  // the production build in real windows: p95 ~17 ms in all three browsers.
+  // Frame timing is only meaningful on a quiet, GPU-backed machine: parallel
+  // browsers on the dev server, headless Firefox (software compositing) and
+  // headless Chromium without a GPU (SwiftShader: p95 50-83 ms on Linux) add
+  // noise. Run with FRAME_CHECK=1 and --workers=1 to enforce the budget; on
+  // Linux add --use-gl=angle --use-angle=gl-egl. Measured with GPU rendering:
+  // p95 ~17 ms in all three browsers on macOS and in Chromium on Linux.
   if (process.env.FRAME_CHECK && browserName !== 'firefox') expect(p95).toBeLessThan(50);
 });
 
