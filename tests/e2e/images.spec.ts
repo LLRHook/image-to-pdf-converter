@@ -75,7 +75,8 @@ test.describe('magick engine in a real browser', () => {
     const r = await run(page, 'png', 'jpg', encodePng(base));
     expect(r.ok).toBe(true);
     const a = assetEvents(r.events);
-    expect(a.length).toBeGreaterThan(2);
+    // First and final values always; reports in between are throttled to 33 ms.
+    expect(a.length).toBeGreaterThanOrEqual(2);
     expect(new Set(a.map((e) => e.url)).size).toBe(1);
     expect(a[0]!.url).toMatch(/magick[\w.-]*\.wasm$/); // dev: node_modules path, build: hashed asset
     const size = readFileSync('node_modules/@imagemagick/magick-wasm/dist/x86/magick.wasm').length;
