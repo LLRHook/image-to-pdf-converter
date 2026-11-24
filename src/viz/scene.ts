@@ -451,28 +451,40 @@ export class Scene {
     const { stripH } = this.L;
     c.font = `500 ${this.L.compact ? 9 : 10}px ${MONO}`;
     c.textBaseline = 'middle';
-    // Pick the most structurally interesting thin segments, then lay their
-    // labels out left to right, nudging each past the previous one so none
-    // are dropped just because two tiny segments sit side by side.
+    // Pick the most structurally interesting thin segments. Labels in the left
+    // half are packed left-to-right, labels in the right half right-to-left, so
+    // clusters at either end of a file stay next to their segments.
     const max = this.L.compact ? 5 : 10;
     const picked = blocks
       .filter((b) => b.w > 0 && b.name !== 'unparsed' && measure(c, b.name) + 12 >= b.w)
       .sort((a, b) => calloutPriority(b.role) - calloutPriority(a.role) || a.f0 - b.f0)
       .slice(0, max)
       .sort((a, b) => a.f0 - b.f0);
-    const right = this.L.stripX + this.L.stripW;
-    let cursor = this.L.stripX;
-    // Right-align the tail so labels near the end don't fall off the strip.
-    const widths = picked.map((b) => measure(c, b.name));
-    for (let i = 0; i < picked.length; i++) {
-      const b = picked[i]!;
-      const label = b.name;
-      const tw = widths[i]!;
+    const left = this.L.stripX;
+    const right = left + this.L.stripW;
+    const mid = left + this.L.stripW / 2;
+    const maxShift = this.L.stripW * 0.22;
+    const placed: { b: Block; lx: number; tw: number }[] = [];
+    let cursor = left;
+    for (const b of picked.filter((x) => x.x + x.w / 2 < mid)) {
+      const tw = measure(c, b.name);
       const cx = b.x + b.w / 2;
-      const remaining = widths.slice(i + 1).reduce((a, w) => a + w + 12, 0);
-      const lx = Math.min(Math.max(cx - tw / 2, cursor), right - tw - remaining);
-      if (lx < cursor - 0.5) continue; // no room left: skip rather than overlap
+      const lx = Math.max(cx - tw / 2, cursor);
+      if (lx + tw > right || Math.abs(lx + tw / 2 - cx) > maxShift) continue;
+      placed.push({ b, lx, tw });
       cursor = lx + tw + 12;
+    }
+    let rcursor = right;
+    for (const b of picked.filter((x) => x.x + x.w / 2 >= mid).reverse()) {
+      const tw = measure(c, b.name);
+      const cx = b.x + b.w / 2;
+      const lx = Math.min(cx - tw / 2, rcursor - tw);
+      if (lx < cursor || Math.abs(lx + tw / 2 - cx) > maxShift) continue;
+      placed.push({ b, lx, tw });
+      rcursor = lx - 12;
+    }
+    for (const { b, lx, tw } of placed) {
+      const cx = b.x + b.w / 2;
       const color = ROLE_COLOR[b.role];
       c.strokeStyle = rgba(color, 0.45 * b.alpha);
       c.beginPath();
@@ -483,7 +495,7 @@ export class Scene {
       c.lineTo(lx + tw / 2 + 0.5, y1);
       c.stroke();
       c.fillStyle = rgba(color, 0.95 * b.alpha);
-      c.fillText(label, lx, labelY);
+      c.fillText(b.name, lx, labelY);
     }
   }
 
