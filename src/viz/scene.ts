@@ -203,6 +203,9 @@ export class Scene {
   private intakeStart = 0;
   private lastOutPacket = 0;
   private payloadReleaseAt = 0;
+  /** Animated pixel lengths of the two strips, on one shared byte scale. */
+  private srcLen = 0;
+  private outLen = 0;
   private previewCanvas: HTMLCanvasElement | null = null;
   private previewKey: unknown = null;
   private previewShownAt = 0;
@@ -228,6 +231,21 @@ export class Scene {
 
   setReducedMotion(r: boolean) {
     this.reduced = r;
+  }
+
+  /**
+   * Both strips use the same bytes-per-pixel scale, so their lengths compare
+   * exactly: an output half the size of the input is drawn half as long.
+   * Until the output exists its size is unknown, so the input sets the scale
+   * and the output placeholder uses the same length.
+   */
+  private lengthTargets(): { src: number; out: number } {
+    const W = this.L.stripW;
+    const s = this.state;
+    if (!s) return { src: W, out: W };
+    const outSize = s.output?.structure ? s.output.size : null;
+    const max = Math.max(1, s.input.size, outSize ?? 0);
+    return { src: (W * s.input.size) / max, out: outSize === null ? (W * s.input.size) / max : (W * outSize) / max };
   }
 
   resize(w: number, h: number, dpr: number) {
@@ -262,10 +280,17 @@ export class Scene {
       compact,
     };
     this.bg = null;
-    // Snap blocks to the new geometry.
-    for (const b of [...this.src, ...this.out]) {
-      b.x = this.L.stripX + b.f0 * this.L.stripW;
-      b.w = (b.f1 - b.f0) * this.L.stripW;
+    // Snap strips and blocks to the new geometry.
+    const len = this.lengthTargets();
+    this.srcLen = len.src;
+    this.outLen = len.out;
+    for (const b of this.src) {
+      b.x = this.L.stripX + b.f0 * this.srcLen;
+      b.w = (b.f1 - b.f0) * this.srcLen;
+    }
+    for (const b of this.out) {
+      b.x = this.L.stripX + b.f0 * this.outLen;
+      b.w = (b.f1 - b.f0) * this.outLen;
     }
   }
 
@@ -279,9 +304,10 @@ export class Scene {
     if (s.input.structure && s.input.structure !== this.srcStructure) {
       this.srcStructure = s.input.structure;
       this.src = blocksFrom(s.input.structure);
+      this.srcLen = this.lengthTargets().src;
       for (const b of this.src) {
-        b.x = this.L.stripX + b.f0 * this.L.stripW;
-        b.w = this.reduced ? (b.f1 - b.f0) * this.L.stripW : 0;
+        b.x = this.L.stripX + b.f0 * this.srcLen;
+        b.w = this.reduced ? (b.f1 - b.f0) * this.srcLen : 0;
         b.alpha = this.reduced ? 1 : 0;
       }
       this.groups = packetGroups(this.src).map((g) => ({ ...g, departed: false }));
@@ -308,7 +334,8 @@ export class Scene {
         const f0 = acc / total;
         acc += p.weight;
         const f1 = acc / total;
-        return { name: p.name, role: p.role, f0, f1, x: this.L.stripX + f0 * this.L.stripW, w: (f1 - f0) * this.L.stripW, alpha: 0, ghost: true };
+        const len = this.lengthTargets().out;
+        return { name: p.name, role: p.role, f0, f1, x: this.L.stripX + f0 * len, w: (f1 - f0) * len, alpha: 0, ghost: true };
       });
       this.outStructure = null;
     }
@@ -319,8 +346,9 @@ export class Scene {
       // expected layout visibly resolves into the true one.
       for (const b of real) {
         const ghost = this.out.find((o) => o.role === b.role) ?? this.out[this.out.length - 1];
-        b.x = this.reduced ? this.L.stripX + b.f0 * this.L.stripW : ghost?.x ?? this.L.stripX;
-        b.w = this.reduced ? (b.f1 - b.f0) * this.L.stripW : ghost?.w ?? 0;
+        const len = this.lengthTargets().out;
+        b.x = this.reduced ? this.L.stripX + b.f0 * len : ghost?.x ?? this.L.stripX;
+        b.w = this.reduced ? (b.f1 - b.f0) * len : ghost?.w ?? 0;
         b.alpha = 1;
       }
       this.out = real;
@@ -411,16 +439,19 @@ export class Scene {
 
   private updateBlocks(dt: number) {
     const k = this.reduced ? 40 : 9;
+    const len = this.lengthTargets();
+    this.srcLen = approach(this.srcLen, len.src, dt, this.reduced ? 40 : 4);
+    this.outLen = approach(this.outLen, len.out, dt, this.reduced ? 40 : 4);
     for (const b of this.src) {
-      const tx = this.L.stripX + b.f0 * this.L.stripW;
-      const tw = (b.f1 - b.f0) * this.L.stripW;
+      const tx = this.L.stripX + b.f0 * this.srcLen;
+      const tw = (b.f1 - b.f0) * this.srcLen;
       b.x = approach(b.x, tx, dt, k);
       b.w = approach(b.w, tw, dt, k * 0.8);
       b.alpha = approach(b.alpha, 1, dt, 6);
     }
     for (const b of this.out) {
-      const tx = this.L.stripX + b.f0 * this.L.stripW;
-      const tw = (b.f1 - b.f0) * this.L.stripW;
+      const tx = this.L.stripX + b.f0 * this.outLen;
+      const tw = (b.f1 - b.f0) * this.outLen;
       b.x = approach(b.x, tx, dt, k);
       b.w = approach(b.w, tw, dt, k);
       b.alpha = approach(b.alpha, 1, dt, 5);
@@ -432,10 +463,11 @@ export class Scene {
   private drawStrip(
     blocks: Block[],
     y: number,
-    opts: { fill?: number; ghost?: boolean; dimDeparted?: boolean; readFraction?: (b: Block) => number },
+    opts: { len: number; fill?: number; ghost?: boolean; dimDeparted?: boolean; readFraction?: (b: Block) => number },
   ) {
     const c = this.ctx;
-    const { stripX, stripW, stripH } = this.L;
+    const { stripX, stripH } = this.L;
+    const stripW = opts.len;
     c.fillStyle = this.th.track;
     c.fillRect(stripX, y, stripW, stripH);
     for (const b of blocks) {
@@ -569,8 +601,8 @@ export class Scene {
     c.textBaseline = 'alphabetic';
     c.fillStyle = this.th.muted;
     c.font = this.th.mono(L.compact ? 9 : 10, 500);
-    c.fillText('INPUT', L.pad, L.srcTitleY - (L.compact ? 0 : 1));
-    const labelW = measure(c, 'INPUT') + 12;
+    c.fillText('ORIGINAL', L.pad, L.srcTitleY - (L.compact ? 0 : 1));
+    const labelW = measure(c, 'ORIGINAL') + 12;
     c.fillStyle = this.th.ink;
     c.font = this.th.title(L.compact ? 17 : 21);
     const nameMax = L.stripW - labelW - 200;
@@ -601,6 +633,7 @@ export class Scene {
       return;
     }
     this.drawStrip(this.src, L.srcY, {
+      len: this.srcLen,
       dimDeparted: true,
       readFraction: (b) => {
         let read = 0;
@@ -629,33 +662,33 @@ export class Scene {
     // Title row.
     c.fillStyle = this.th.muted;
     c.font = this.th.mono(L.compact ? 9 : 10, 500);
-    c.fillText('OUTPUT', L.pad, L.outTitleY);
-    const labelW = measure(c, 'OUTPUT') + 12;
+    c.fillText('CONVERTED', L.pad, L.outTitleY);
+    const labelW = measure(c, 'CONVERTED') + 12;
     const info = formatInfo(s.route.to);
     c.fillStyle = s.output ? this.th.ink : this.th.muted;
     c.font = this.th.title(L.compact ? 17 : 21);
-    const outName = s.output?.name ?? `${info.label} · being written`;
+    const outName = s.output?.name ?? `New ${info.label} file`;
     c.fillText(ellipsize(c, outName, Math.max(80, L.stripW - labelW - 220)), L.pad + labelW, L.outTitleY);
     c.font = this.th.mono(L.compact ? 9 : 10, 500);
     c.textAlign = 'right';
     c.fillStyle = this.th.muted;
     if (s.output) {
-      const ratio = s.output.size / Math.max(1, s.input.size);
-      c.fillText(`${info.label} · ${fmtBytes(s.output.size)} · ×${ratio < 0.01 ? ratio.toExponential(1) : ratio.toFixed(2)}`, L.pad + L.stripW, L.outTitleY);
+      c.fillText(`${info.label} · ${fmtBytes(s.output.size)}`, L.pad + L.stripW, L.outTitleY);
     } else if (ghost) {
-      c.fillText('expected layout · real sizes after write', L.pad + L.stripW, L.outTitleY);
+      c.fillText('usual layout · real size shown when finished', L.pad + L.stripW, L.outTitleY);
     }
     c.textAlign = 'left';
 
-    this.drawStrip(this.out, L.outY, { ghost, fill: ghost ? this.shownFill : undefined });
+    this.drawStrip(this.out, L.outY, { len: this.outLen, ghost, fill: ghost ? this.shownFill : undefined });
+    this.drawScaleGuide(ghost);
     // Indeterminate writing: shimmer across the ghost, never a fill.
     if (ghost && writing && measured === null && !this.reduced) {
-      const x = L.stripX + ((this.t * 0.6) % 1.3) * L.stripW;
+      const x = L.stripX + ((this.t * 0.6) % 1.3) * this.outLen;
       const grad = c.createLinearGradient(x - 160, 0, x, 0);
       grad.addColorStop(0, rgba(this.th.accent, 0));
       grad.addColorStop(1, rgba(this.th.accent, 0.22));
       c.fillStyle = grad;
-      c.fillRect(Math.max(L.stripX, x - 160), L.outY, Math.max(0, Math.min(160, x - L.stripX, L.stripX + L.stripW - (x - 160))), L.stripH);
+      c.fillRect(Math.max(L.stripX, x - 160), L.outY, Math.max(0, Math.min(160, x - L.stripX, L.stripX + this.outLen - (x - 160))), L.stripH);
     }
     this.drawCallouts(this.out, L.outY, L.outCalloutY, false);
   }
@@ -675,14 +708,14 @@ export class Scene {
       c.textBaseline = 'alphabetic';
       c.font = this.th.title(L.compact ? 24 : 32);
       c.fillStyle = this.th.ink;
-      c.fillText(this.srcStructure ? 'Inspected' : 'Inspecting…', x0, ch.y + (L.compact ? 50 : 60));
+      c.fillText(this.srcStructure ? 'What’s inside' : 'Reading the file…', x0, ch.y + (L.compact ? 50 : 60));
       c.font = this.th.mono(L.compact ? 10 : 11, 500);
       c.fillStyle = this.th.muted;
-      const summary = this.srcStructure?.summary ?? 'Reading the file’s own structure';
+      const summary = this.srcStructure?.summary ?? '';
       c.fillText(ellipsize(c, summary, ch.w - 40), x0, ch.y + (L.compact ? 72 : 84));
       if (this.srcStructure) {
         c.fillText(
-          `${this.srcStructure.segments.length.toLocaleString()} top-level segments${this.srcStructure.truncated ? ' · stopped at read budget' : ''} · choose an output format`,
+          `${this.srcStructure.segments.length.toLocaleString()} parts${this.srcStructure.truncated ? ' (only the first 8 MB were read)' : ''}. Pick a format below.`,
           x0,
           ch.y + (L.compact ? 90 : 104),
         );
@@ -697,7 +730,7 @@ export class Scene {
       c.font = this.th.mono(10, 500);
       c.fillStyle = this.th.faint;
       c.textBaseline = 'middle';
-      c.fillText('output layout appears here', L.stripX + 10, L.outY + L.stripH / 2);
+      c.fillText('the converted file will appear here', L.stripX + 10, L.outY + L.stripH / 2);
       c.textBaseline = 'alphabetic';
       return;
     }
@@ -725,21 +758,21 @@ export class Scene {
     const titleY = inner.y + (L.compact ? 50 : 58);
     c.font = this.th.title(L.compact ? 24 : 32);
     c.fillStyle = this.th.ink;
-    let title = engineName(hop.engine);
+    let title = 'Converting';
     let sub = '';
     if (s.phase === 'done') {
       title = 'Done';
-      sub = `${fmtMs((s.endedAt ?? t) - s.startedAt)} on this device · nothing uploaded`;
+      sub = `Took ${fmtMs((s.endedAt ?? t) - s.startedAt)} on your computer.`;
     } else if (s.phase === 'error') {
-      title = 'Conversion failed';
+      title = 'Something went wrong';
       sub = s.error ?? '';
     } else if (s.phase === 'cancelled') {
-      title = 'Cancelled';
-      sub = 'The worker was stopped and its memory released.';
+      title = 'Stopped';
+      sub = 'The conversion was stopped and its memory freed.';
     } else if (active) {
       sub = active.label;
     } else {
-      sub = 'Starting worker…';
+      sub = 'Starting…';
     }
     c.fillText(title, inner.x, titleY);
     c.font = this.th.mono(L.compact ? 10 : 11, 500);
@@ -750,7 +783,7 @@ export class Scene {
     if (hop.fallbacks.length && s.phase === 'running') {
       const fb = hop.fallbacks[hop.fallbacks.length - 1]!;
       c.fillStyle = rgba(this.th.notice, 0.9);
-      c.fillText(ellipsize(c, `${engineName(fb.fromEngine)} can't do this here → switched to ${engineName(hop.engine)}`, inner.w * 0.5), inner.x, titleY + 40);
+      c.fillText(ellipsize(c, `Switched to ${engineName(hop.engine)}: ${engineName(fb.fromEngine)} can’t do this in this browser`, inner.w * 0.5), inner.x, titleY + 40);
     }
 
     // Progress row (measured) or indeterminate meter.
@@ -768,6 +801,48 @@ export class Scene {
       ? { x: inner.x, y: titleY + 52, w: inner.w, h: barY - (titleY + 52) - 14 }
       : { x: inner.x + inner.w * 0.5, y: inner.y + 30, w: inner.w * 0.5, h: inner.h - 30 };
     if (ir.h > 40) this.drawRepresentation(s, hop, ir);
+  }
+
+  /**
+   * When the real output exists, a dashed guide drops from the end of the
+   * input to the output row, and the output end is labelled with its exact
+   * size relative to the original.
+   */
+  private drawScaleGuide(ghost: boolean) {
+    const s = this.state;
+    if (!s?.output || ghost) return;
+    const c = this.ctx;
+    const L = this.L;
+    const inEnd = L.stripX + this.srcLen;
+    const outEnd = L.stripX + this.outLen;
+    c.save();
+    c.strokeStyle = rgba(this.th.ink, 0.28);
+    c.setLineDash([3, 4]);
+    // Only in the gaps above and below the engine panel, never across it.
+    const gx = Math.round(inEnd) + 0.5;
+    c.beginPath();
+    c.moveTo(gx, L.srcY + L.stripH + 2);
+    c.lineTo(gx, L.chamber.y - 6);
+    c.moveTo(gx, L.chamber.y + L.chamber.h + 6);
+    c.lineTo(gx, L.outY - 2);
+    c.stroke();
+    c.restore();
+    const ratio = s.output.size / Math.max(1, s.input.size);
+    const label =
+      ratio < 0.995 ? `${(ratio * 100).toFixed(ratio < 0.1 ? 1 : 0)}% of the original` : ratio > 1.005 ? `${ratio.toFixed(ratio < 10 ? 2 : 0)}× the original` : 'same size as the original';
+    c.font = this.th.mono(11, 500);
+    c.textBaseline = 'middle';
+    const tw = measure(c, label);
+    const fits = outEnd + 10 + tw <= L.stripX + L.stripW;
+    const lx = fits ? outEnd + 12 : Math.max(L.stripX + 8, outEnd - tw - 12);
+    if (!fits) {
+      c.fillStyle = this.th.name === 'light' ? 'rgba(255,255,255,0.88)' : 'rgba(10,10,18,0.78)';
+      roundRect(c, lx - 7, L.outY + 4, tw + 14, L.stripH - 8, (L.stripH - 8) / 2);
+      c.fill();
+    }
+    c.fillStyle = this.th.ink;
+    c.fillText(label, lx, L.outY + L.stripH / 2 + 0.5);
+    c.textBaseline = 'alphabetic';
   }
 
   /** A hex-editor style table of the real top-level segments: offset, name, size, parsed detail. */
@@ -850,10 +925,10 @@ export class Scene {
     if (asset && st.id === 'load') {
       measured = asset.total ? asset.loaded / asset.total : null;
       label = asset.total
-        ? `downloading engine · ${fmtBytes(asset.loaded)} / ${fmtBytes(asset.total)}`
-        : `downloading engine · ${fmtBytes(asset.loaded)}`;
+        ? `Downloading the converter (first time only): ${fmtBytes(asset.loaded)} of ${fmtBytes(asset.total)}`
+        : `Downloading the converter (first time only): ${fmtBytes(asset.loaded)}`;
     } else {
-      label = measured !== null ? `${Math.floor(this.shownProgress * 100)}% measured` : `running · ${fmtMs(t - (st.startedAt ?? t))}`;
+      label = measured !== null ? `${Math.floor(this.shownProgress * 100)}%` : `Working… ${fmtMs(t - (st.startedAt ?? t))}`;
     }
     c.fillStyle = this.th.track;
     c.fillRect(x, y, w, 3);
@@ -894,7 +969,7 @@ export class Scene {
     });
     c.fillStyle = this.th.muted;
     const slowest = [...stages].sort((a, b) => (b.endedAt! - b.startedAt!) - (a.endedAt! - a.startedAt!))[0];
-    c.fillText(slowest ? `longest step: ${slowest.label} · ${fmtMs(slowest.endedAt! - slowest.startedAt!)}` : '', x, y + 18);
+    c.fillText(slowest ? `Slowest step: ${slowest.label} (${fmtMs(slowest.endedAt! - slowest.startedAt!)})` : '', x, y + 18);
   }
 
   private drawRepresentation(s: VizState, hop: HopView, r: { x: number; y: number; w: number; h: number }) {
@@ -942,7 +1017,7 @@ export class Scene {
       }
       c.fillStyle = this.th.muted;
       c.textAlign = 'right';
-      c.fillText(`${factLine}${facts ? ' · ' : ''}${preview.width}×${preview.height} real sample`, box.x + box.w, labelY);
+      c.fillText(`${factLine}${facts ? ' · ' : ''}preview from the decoded pixels`, box.x + box.w, labelY);
       c.textAlign = 'left';
       return;
     }
@@ -1139,7 +1214,7 @@ export class Scene {
         g.departed = true;
         for (const b of this.src) if (b.f0 < g.f1 && b.f1 > g.f0 && b.f1 <= g.f1 + 1e-6) b.departed = true;
         if (this.reduced) continue;
-        const x0 = L.stripX + ((g.f0 + g.f1) / 2) * L.stripW;
+        const x0 = L.stripX + ((g.f0 + g.f1) / 2) * this.srcLen;
         const y0 = L.srcY + L.stripH / 2;
         const x1 = ch.x + ch.w / 2 + (Math.random() - 0.5) * 60;
         const y1 = ch.y + 6;
@@ -1153,7 +1228,7 @@ export class Scene {
           y1,
           t0: tnow,
           dur: 620 + Math.random() * 260,
-          w0: Math.min(14, Math.max(4, (g.f1 - g.f0) * L.stripW)),
+          w0: Math.min(14, Math.max(4, (g.f1 - g.f0) * this.srcLen)),
         });
       }
     } else {
@@ -1193,7 +1268,7 @@ export class Scene {
       if (part) {
         const x0 = ch.x + ch.w / 2 + (Math.random() - 0.5) * 50;
         const y0 = ch.y + ch.h - 6;
-        const x1 = L.stripX + at * L.stripW;
+        const x1 = L.stripX + at * this.outLen;
         const y1 = L.outY + L.stripH / 2;
         this.packets.push({ color: this.th.role[part.role], x0, y0, cx: x1, cy: (y0 + y1) / 2 - 10, x1, y1, t0: tnow, dur: 560, w0: 6 });
       }
@@ -1385,7 +1460,11 @@ const easeOut = (u: number) => 1 - Math.pow(1 - u, 3);
 export function describeFacts(f: NonNullable<HopView['facts']>): string {
   switch (f.kind) {
     case 'raster':
-      return `${f.width}×${f.height} px${f.frames && f.frames > 1 ? ` · ${f.frames} frames` : ''}${f.channels ? ` · ${f.channels === 4 ? 'RGBA' : f.channels === 3 ? 'RGB' : f.channels === 1 ? 'grey' : `${f.channels} ch`}` : ''}${f.depth ? ` ${f.depth}-bit` : ''}`;
+    {
+      // Raw size of the pixels: width × height × channels × bytes per channel × frames.
+      const raw = f.channels && f.depth ? f.width * f.height * f.channels * (f.depth / 8) * (f.frames ?? 1) : 0;
+      return `${f.width}×${f.height} px${f.frames && f.frames > 1 ? ` · ${f.frames} frames` : ''}${f.channels ? ` · ${f.channels === 4 ? 'RGBA' : f.channels === 3 ? 'RGB' : f.channels === 1 ? 'grey' : `${f.channels} ch`}` : ''}${f.depth ? ` ${f.depth}-bit` : ''}${raw ? ` · ${fmtBytes(raw)} uncompressed` : ''}`;
+    }
     case 'pages':
       return `${f.pages} page${f.pages === 1 ? '' : 's'}${f.width && f.height ? ` · ${Math.round(f.width)}×${Math.round(f.height)} pt` : ''}`;
     case 'document':

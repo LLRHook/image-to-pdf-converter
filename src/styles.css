@@ -227,7 +227,7 @@ button {
 }
 
 .app.dragging::before {
-  content: 'Drop to inspect';
+  content: 'Drop your file';
   position: fixed;
   inset: 14px;
   z-index: 50;

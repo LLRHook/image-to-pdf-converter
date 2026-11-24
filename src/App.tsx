@@ -19,7 +19,7 @@ const FAMILY_LABEL: Record<Family, string> = {
   archive: 'Archives',
 };
 
-const FIDELITY_LABEL = { lossless: 'lossless', lossy: 'lossy', semantic: 're-laid out', raster: 'rasterised' } as const;
+const FIDELITY_LABEL = { lossless: 'exact', lossy: 'some quality loss', semantic: 'layout may change', raster: 'saved as an image' } as const;
 
 const now = () => performance.now() + performance.timeOrigin;
 
@@ -215,24 +215,24 @@ export default function App() {
           any<span>to</span>any
         </div>
         <div className="top-note glass">
-          <span className="dot" /> runs on this device · nothing is uploaded
+          <span className="dot" /> Files stay on your computer
         </div>
       </header>
 
       {!picked && (
         <section className="hero">
           <h1>
-            Drop a file.
+            Convert files
             <br />
-            <em>Watch it become another.</em>
+            <em>without uploading them.</em>
           </h1>
           <p className="lede">
-            Images, documents, spreadsheets, audio and video, converted inside your browser. You can watch the
-            file come apart into its real pieces and get put back together as the format you picked.
+            Works with images, documents, spreadsheets, audio and video. Pick a file, choose the format you
+            want, and download the result. Everything happens in this browser tab.
           </p>
           <button className="drop glass" onClick={() => inputRef.current?.click()}>
             <span className="drop-title">Choose a file</span>
-            <span className="drop-sub">or drop it anywhere · or paste</span>
+            <span className="drop-sub">or drag it onto the page</span>
           </button>
           <Formats readable={readable} />
           <Privacy />
@@ -258,8 +258,8 @@ export default function App() {
 
           {!picked.format && !picked.inspecting && (
             <div className="notice">
-              This file type isn&rsquo;t recognised. Try a file with a common extension, or rename it if the
-              extension is wrong.
+              We couldn&rsquo;t tell what kind of file this is. Check that its name ends in the right extension,
+              like .jpg or .docx.
             </div>
           )}
 
@@ -270,11 +270,11 @@ export default function App() {
                   Convert <b className="flow-text">{formatInfo(picked.format).label}</b> to
                 </span>
                 <button className="ghost" onClick={clear}>
-                  Different file
+                  Choose another file
                 </button>
               </div>
               {grouped.length === 0 && !picked.inspecting && (
-                <div className="notice">Nothing can convert {formatInfo(picked.format).label} files yet.</div>
+                <div className="notice">{formatInfo(picked.format).label} files can&rsquo;t be converted yet.</div>
               )}
               {grouped.map(([fam, list]) => (
                 <div className="fam" key={fam}>
@@ -346,10 +346,10 @@ export default function App() {
                     setPicked((p) => (p ? { ...p } : p));
                   }}
                 >
-                  Another format
+                  Convert again
                 </button>
                 <button className="ghost" onClick={clear}>
-                  New file
+                  Start over
                 </button>
               </div>
             </div>
@@ -359,10 +359,11 @@ export default function App() {
 
       <footer className="foot">
         <span>
-          Free software (GPL-3.0). Engines: ImageMagick, MuPDF, resvg, pandoc, Typst, SheetJS, Mediabunny, FFmpeg.
+          Free and open source (GPL-3.0). Built on ImageMagick, MuPDF, resvg, pandoc, Typst, SheetJS, Mediabunny
+          and FFmpeg.
         </span>
         <a href="https://github.com/LLRHook/image-to-pdf-converter" rel="noreferrer noopener">
-          Source
+          Source code
         </a>
       </footer>
     </div>
@@ -429,19 +430,18 @@ function Formats({ readable }: { readable: Set<FormatId> }) {
 function Privacy() {
   return (
     <div className="privacy">
-      <div className="privacy-title">What happens to your file</div>
+      <div className="privacy-title">Your files stay private</div>
       <ul>
         <li className="glass">
-          <b>It stays on this device.</b> The conversion engines are WebAssembly programs that run in your
-          browser. There is no server to upload to.
+          <b>Nothing is uploaded</b> Your file is converted on your own computer. It is never sent to a server.
         </li>
         <li className="glass">
-          <b>The network is locked.</b> Each engine runs in a sandboxed worker that can only load this site&rsquo;s
-          own engine files. The page&rsquo;s security policy blocks every other connection.
+          <b>No outside connections</b> The page only loads its own converters from this website. It can&rsquo;t
+          send your data anywhere.
         </li>
         <li className="glass">
-          <b>Nothing is kept.</b> Each conversion gets a fresh worker that is shut down when it finishes. Files are
-          never written to storage. Close the tab and they&rsquo;re gone.
+          <b>Nothing is saved</b> Your file is only held in memory while it converts. Close the tab and it&rsquo;s
+          gone.
         </li>
       </ul>
     </div>
