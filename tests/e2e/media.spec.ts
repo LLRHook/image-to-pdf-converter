@@ -8,36 +8,11 @@
  */
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { join } from 'node:path';
-import { openHarness as rawOpen, convert as rawConvert, b64File, bytes } from './helpers';
+import { b64File, bytes, convert, openHarness, stageIds } from './helpers';
 import { audioDigest, demuxInfo, ffprobeBytes, makeMedia } from '../../src/engines/ffmpeg/test-support/verify';
 import { ffmpegStages } from '../../src/engines/ffmpeg/plan';
 import { mediabunnyStages } from '../../src/engines/mediabunny/plan';
 import type { FormatId } from '../../src/core/formats';
-
-/**
- * The shared Vite dev server re-optimises dependencies the first time a new
- * engine imports them and reloads the page mid-run; retry once on that.
- */
-const RELOADED = /Execution context was destroyed|interrupted by another navigation|not bound in the connection|Target (page|closed)|navigation/i;
-async function openHarness(page: Page) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await rawOpen(page);
-    } catch (err) {
-      if (attempt >= 3 || !RELOADED.test(String(err))) throw err;
-    }
-  }
-}
-async function convert(page: Page, args: Record<string, unknown>) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await rawConvert(page, args);
-    } catch (err) {
-      if (attempt >= 3 || !RELOADED.test(String(err))) throw err;
-      await openHarness(page);
-    }
-  }
-}
 
 const FIX = join(import.meta.dirname, '../../src/engines/ffmpeg/fixtures');
 const fx = (name: string) => b64File(join(FIX, name));
@@ -155,7 +130,6 @@ const toNums = (x: any): number[] => (Array.isArray(x) ? x : ArrayBuffer.isView(
 
 const engines = (run: any): string[] => run.events.filter((e: any) => e.type === 'hop-start').map((e: any) => e.engine);
 const fallbacks = (run: any) => run.events.filter((e: any) => e.type === 'fallback');
-const stagesOf = (run: any): string[] => run.events.filter((e: any) => e.type === 'stage').map((e: any) => e.stage);
 
 function expectProgressSane(run: any) {
   let stage = '';
@@ -214,7 +188,7 @@ test.describe('default route (mediabunny, ffmpeg fallback) - every pair', () => 
       const expected = from === 'gif' || to === 'gif' ? 'ffmpeg' : null;
       if (expected) expect(used).toBe(expected);
       const declared = (used === 'ffmpeg' ? ffmpegStages(from, to) : mediabunnyStages(from, to)).map((s) => s.id);
-      expect(stagesOf(run).slice(-declared.length)).toEqual(declared);
+      expect(stageIds(run.events).slice(-declared.length)).toEqual(declared);
       note(info, 'default', `${from}->${to}`, used, ms, fallbacks(run).length ? `fallback: ${fallbacks(run)[0].reason}` : '');
     });
   }
@@ -228,7 +202,7 @@ test.describe('ffmpeg engine (wasm) - every pair, run directly', () => {
       await expectValid(from, to, run, true);
       expect(engines(run)).toEqual(['ffmpeg']);
       expect(fallbacks(run)).toEqual([]);
-      expect(stagesOf(run)).toEqual(ffmpegStages(from, to).map((s) => s.id));
+      expect(stageIds(run.events)).toEqual(ffmpegStages(from, to).map((s) => s.id));
       expectProgressSane(run);
       // the input Blob is read in place by WORKERFS, never copied into the wasm heap
       expect(run.events.some((e: any) => e.type === 'log' && /WORKERFS/.test(e.message))).toBe(true);
@@ -266,7 +240,7 @@ test.describe('mediabunny engine (WebCodecs) - run directly, no fallback', () =>
       const [run, ms] = await timed(() => convert(page, { from, to, engine: 'mediabunny', base64: fx(SOURCE[from]!), name: `input.${from}` }));
       if (run.ok) {
         await expectValid(from, to, run);
-        expect(stagesOf(run)).toEqual(mediabunnyStages(from, to).map((s) => s.id));
+        expect(stageIds(run.events)).toEqual(mediabunnyStages(from, to).map((s) => s.id));
         expectProgressSane(run);
         expect(run.events.some((e: any) => e.type === 'facts')).toBe(true);
         const how = run.events.filter((e: any) => e.type === 'log').map((e: any) => e.message).find((m: string) => m.startsWith('mediabunny:'));

@@ -7,7 +7,7 @@ import { expect, test } from '@playwright/test';
 import * as XLSX from 'xlsx';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import YAML from 'yaml';
-import { bytes, convert, openHarness } from './helpers';
+import { bytes, convert, openHarness, stageIds } from './helpers';
 
 const b64 = (data: Uint8Array | string) => Buffer.from(typeof data === 'string' ? strToU8(data) : data).toString('base64');
 const OK = (r: any) => {
@@ -17,7 +17,6 @@ const OK = (r: any) => {
 };
 const outBytes = (r: any) => new Uint8Array(bytes(r.base64));
 const outText = (r: any) => strFromU8(outBytes(r));
-const stageIds = (r: any, hop = 0) => r.events.filter((e: any) => e.type === 'stage' && e.hop === hop).map((e: any) => e.stage);
 
 function sheetBytes(bookType: 'xlsx' | 'xls' | 'ods', sheets: Record<string, XLSX.WorkSheet | unknown[][]>): Uint8Array {
   const wb = XLSX.utils.book_new();
@@ -86,7 +85,7 @@ test('csv -> xlsx: typed cells, no formulas, accurate stages/facts/preview', asy
   expect(String(d[2]![5]!.v)).toBe('=HYPERLINK("http://x")');
   expect(strFromU8(unzipSync(outBytes(r))['xl/worksheets/sheet1.xml']!)).not.toMatch(/<f[ >]/);
 
-  expect(stageIds(r)).toEqual(['read', 'decode', 'transform', 'encode']);
+  expect(stageIds(r.events, 0)).toEqual(['read', 'decode', 'transform', 'encode']);
   const facts = r.events.find((e: any) => e.type === 'facts');
   expect(facts.facts).toEqual({ kind: 'table', sheets: 1, rows: 3, cols: 6 });
   const preview = r.events.find((e: any) => e.type === 'preview').preview;
@@ -129,7 +128,7 @@ for (const bt of ['xlsx', 'ods', 'xls'] as const) {
     const src = sheetBytes(bt, { Data: typedSheet() });
     const csv = OK(await convert(page, { engine: 'sheet', from: bt, to: 'csv', base64: b64(src) }));
     expect(outText(csv).trimEnd().split('\r\n')).toEqual(['name,when,day,ok,calc', 'Ann,2024-01-15T12:30:00,2024-01-15,TRUE,4']);
-    expect(stageIds(csv)).toEqual(['read', 'decode', 'transform', 'encode', 'package']);
+    expect(stageIds(csv.events, 0)).toEqual(['read', 'decode', 'transform', 'encode', 'package']);
     const json = OK(await convert(page, { engine: 'sheet', from: bt, to: 'json', base64: b64(src) }));
     expect(JSON.parse(outText(json))).toEqual([{ name: 'Ann', when: '2024-01-15T12:30:00', day: '2024-01-15', ok: true, calc: 4 }]);
   });
@@ -153,7 +152,7 @@ test('xlsx <-> ods keep values, formulas and dates; unicode and CSV BOM', async 
   const src = sheetBytes('xlsx', { Data: typedSheet(), Two: [['k'], ['é']] });
   const ods = OK(await convert(page, { engine: 'sheet', from: 'xlsx', to: 'ods', base64: b64(src) }));
   expect(ods.ext).toBe('ods');
-  expect(stageIds(ods)).toEqual(['read', 'decode', 'encode']);
+  expect(stageIds(ods.events, 0)).toEqual(['read', 'decode', 'encode']);
   const back = OK(await convert(page, { engine: 'sheet', from: 'ods', to: 'xlsx', base64: ods.base64 }));
   const d = dense(outBytes(back), 'Data');
   expect(d[1]![0]).toMatchObject({ t: 's', v: 'Ann' });
@@ -181,7 +180,7 @@ test('json -> xlsx / ods / csv / tsv, never creating formulas', async ({ page })
   expect(dense(outBytes(ods), 'Sheet1')[2]![1]!.v).toBe('Bob');
   const csv = OK(await convert(page, { engine: 'sheet', from: 'json', to: 'csv', base64: b64(JSON.stringify(data)) }));
   expect(outText(csv).split('\r\n')[0]).toBe('id,name,ok,tags,note,extra');
-  expect(stageIds(csv)).toEqual(['read', 'decode', 'transform', 'encode', 'package']);
+  expect(stageIds(csv.events, 0)).toEqual(['read', 'decode', 'transform', 'encode', 'package']);
   const tsv = OK(await convert(page, { engine: 'sheet', from: 'json', to: 'tsv', base64: b64('[{"a":1,"b":"x"}]') }));
   expect(outText(tsv)).toBe('a\tb\n1\tx\n');
   const sheets = OK(await convert(page, { engine: 'sheet', from: 'json', to: 'csv', base64: b64('{"A":[{"k":1}],"B":[{"k":2}]}') }));
@@ -207,7 +206,7 @@ const DOC = { name: 'Ann', n: 3, ok: true, nothing: null, list: [1, 'two', { thr
 test('json -> yaml -> json lossless; yaml safe for YAML 1.1 readers', async ({ page }) => {
   const y = OK(await convert(page, { engine: 'datatree', from: 'json', to: 'yaml', base64: b64(JSON.stringify(DOC)) }));
   expect(y.ext).toBe('yaml');
-  expect(stageIds(y)).toEqual(['read', 'decode', 'encode']);
+  expect(stageIds(y.events, 0)).toEqual(['read', 'decode', 'encode']);
   expect(YAML.parse(outText(y), { version: '1.1' })).toEqual(DOC);
   const back = OK(await convert(page, { engine: 'datatree', from: 'yaml', to: 'json', base64: y.base64 }));
   expect(JSON.parse(outText(back))).toEqual(DOC);
@@ -247,7 +246,7 @@ test('xml <-> json <-> yaml follow the documented mapping and round-trip semanti
   const xml = OK(await convert(page, { engine: 'datatree', from: 'json', to: 'xml', base64: asJson.base64 }));
   expect(xml.ext).toBe('xml');
   expect(outText(xml).startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true);
-  expect(stageIds(xml)).toEqual(['read', 'decode', 'transform', 'encode']);
+  expect(stageIds(xml.events, 0)).toEqual(['read', 'decode', 'transform', 'encode']);
   const again = OK(await convert(page, { engine: 'datatree', from: 'xml', to: 'json', base64: xml.base64 }));
   expect(JSON.parse(outText(again))).toEqual(tree);
   const yml = OK(await convert(page, { engine: 'datatree', from: 'xml', to: 'yaml', base64: b64(XML) }));

@@ -14,7 +14,8 @@ import {
   MagickReadSettings,
   initializeImageMagick,
 } from '@imagemagick/magick-wasm';
-import type { Raster } from './test-utils';
+import type { Raster } from '../../src/engines/magick/test-utils';
+import { retryOnReload } from './helpers';
 
 let magickReady: Promise<void> | null = null;
 export function initNodeMagick(): Promise<void> {
@@ -56,8 +57,8 @@ export function encodeAnimation(frames: Raster[], delays: number[], format: Magi
 /** Decode with the browser's own codec (an implementation independent of ImageMagick). null = this browser can't decode the type. */
 export async function nativeDecode(page: Page, bytes: Uint8Array, mime: string): Promise<Raster | null> {
   const res = await retryOnReload(
-    () => page.waitForLoadState('load'),
     () => nativeDecodeOnce(page, bytes, mime),
+    () => page.waitForLoadState('load'),
   );
   return res ? { width: res.width, height: res.height, rgba: new Uint8Array(Buffer.from(res.b64, 'base64')) } : null;
 }
@@ -83,24 +84,4 @@ async function nativeDecodeOnce(page: Page, bytes: Uint8Array, mime: string) {
     },
     [Buffer.from(bytes).toString('base64'), mime],
   );
-}
-
-export const stageIds = (events: { type: string; stage?: string }[]) => events.filter((e) => e.type === 'stage').map((e) => e.stage!);
-export const progressValues = (events: { type: string; value?: number }[]) => events.filter((e) => e.type === 'progress').map((e) => e.value!);
-export const assetEvents = (events: { type: string; url?: string; loaded?: number; total?: number | null }[]) =>
-  events.filter((e) => e.type === 'asset') as { url: string; loaded: number; total: number | null }[];
-
-/**
- * The dev server reloads the page when any file in the repo changes (other people edit it while specs run).
- * A reload destroys the evaluate context; reopen the harness and try the call again.
- */
-export async function retryOnReload<T>(reopen: () => Promise<unknown>, fn: () => Promise<T>, attempts = 3): Promise<T> {
-  for (let i = 1; ; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      if (i >= attempts || !/Execution context was destroyed|navigation|Target (page|closed)|harness is undefined|interrupted by another navigation/i.test(String((e as Error).message))) throw e;
-      await reopen();
-    }
-  }
 }

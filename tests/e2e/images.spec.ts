@@ -6,17 +6,7 @@ import { expandEdges } from '../../src/core/graph';
 import { formatInfo, type FormatId } from '../../src/core/formats';
 import { edges } from '../../src/engines/magick/edges';
 import { READABLE, WRITABLE } from '../../src/engines/magick/meta';
-import {
-  assetEvents,
-  decodeFrames,
-  encodeAnimation,
-  encodeRaster,
-  initNodeMagick,
-  nativeDecode,
-  progressValues,
-  retryOnReload,
-  stageIds,
-} from '../../src/engines/magick/e2e-support';
+import { decodeFrames, encodeAnimation, encodeRaster, initNodeMagick, nativeDecode } from './magick-support';
 import {
   bombPng,
   compare,
@@ -31,7 +21,7 @@ import {
   withExifOrientation,
   type Raster,
 } from '../../src/engines/magick/test-utils';
-import { convert, openHarness } from './helpers';
+import { assetEvents, convert, openHarness, progressValues, stageIds } from './helpers';
 
 const HOPS = expandEdges(edges.map((e) => ({ ...e, engine: 'magick' })));
 const hop = (from: FormatId, to: FormatId) => HOPS.find((h) => h.from === from && h.to === to)!;
@@ -47,7 +37,7 @@ const base = sampleRaster(96, 64);
 const sources = new Map<FormatId, Uint8Array>();
 
 async function run(page: Page, from: FormatId, to: FormatId, input: Uint8Array, extra: Record<string, unknown> = {}) {
-  return retryOnReload(() => openHarness(page), () => convert(page, { from, to, engine: 'magick', base64: b64(input), name: `in.${from}`, ...extra }));
+  return convert(page, { from, to, engine: 'magick', base64: b64(input), name: `in.${from}`, ...extra });
 }
 
 test.describe('magick engine in a real browser', () => {
@@ -75,7 +65,7 @@ test.describe('magick engine in a real browser', () => {
       if (!u.startsWith('http://localhost') && !u.startsWith('data:') && !u.startsWith('blob:')) external.push(u);
     });
     (page as unknown as { __external: string[] }).__external = external;
-    await retryOnReload(() => page.waitForTimeout(300), () => openHarness(page));
+    await openHarness(page);
   });
   test.afterEach(async ({ page }) => {
     expect((page as unknown as { __external: string[] }).__external).toEqual([]);
@@ -178,7 +168,7 @@ test.describe('behaviour in a real browser', () => {
     await initNodeMagick();
   });
   test.beforeEach(async ({ page }) => {
-    await retryOnReload(() => page.waitForTimeout(300), () => openHarness(page));
+    await openHarness(page);
   });
 
   test('HEIC (HEVC, hardware-independent wasm decode) -> png/jpg/webp', async ({ page }) => {
@@ -347,12 +337,12 @@ test.describe('behaviour in a real browser', () => {
 
 test.describe('resvg engine in a real browser', () => {
   test.beforeEach(async ({ page }) => {
-    await retryOnReload(() => page.waitForTimeout(300), () => openHarness(page));
+    await openHarness(page);
   });
 
   const svg = (body: string, w = 100, h = 50) => `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}">${body}</svg>`;
   const run2 = (page: Page, doc: string) =>
-    retryOnReload(() => openHarness(page), () => convert(page, { from: 'svg', to: 'png', engine: 'resvg', base64: Buffer.from(doc).toString('base64') }));
+    convert(page, { from: 'svg', to: 'png', engine: 'resvg', base64: Buffer.from(doc).toString('base64') });
 
   test('svg -> png renders at >=1024 px, vector-sharp, with a byte-accurate wasm download', async ({ page }) => {
     const r = await run2(page, svg('<rect x="25" y="10" width="50" height="30" fill="#0a8040"/>'));

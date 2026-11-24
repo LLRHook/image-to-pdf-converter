@@ -5,9 +5,9 @@ import * as mupdf from 'mupdf';
 import { expandEdges } from '../../src/core/graph';
 import type { FormatId } from '../../src/core/formats';
 import { edges } from '../../src/engines/mupdf/edges';
-import { assetEvents, nativeDecode, progressValues, retryOnReload, stageIds } from '../../src/engines/magick/e2e-support';
+import { nativeDecode } from './magick-support';
 import { compare, decodePng, encodePng, sampleRaster } from '../../src/engines/magick/test-utils';
-import { convert, openHarness } from './helpers';
+import { assetEvents, convert, openHarness, progressValues, stageIds } from './helpers';
 
 const HOPS = expandEdges(edges.map((e) => ({ ...e, engine: 'mupdf' })));
 const hop = (from: FormatId, to: FormatId) => HOPS.find((h) => h.from === from && h.to === to)!;
@@ -67,7 +67,7 @@ function nodeRender(pdf: Uint8Array, index: number, dpi: number) {
 }
 
 async function run(page: Page, from: FormatId, to: FormatId, input: Uint8Array, options?: Record<string, unknown>, name = `doc.${from}`) {
-  return retryOnReload(() => openHarness(page), () => convert(page, { from, to, engine: 'mupdf', base64: b64(input), name, options }));
+  return convert(page, { from, to, engine: 'mupdf', base64: b64(input), name, options });
 }
 
 const three = makePdf([{}, { w: 400, h: 300 }, {}]);
@@ -81,7 +81,7 @@ test.describe('mupdf engine in a real browser', () => {
       if (!u.startsWith('http://localhost') && !u.startsWith('data:') && !u.startsWith('blob:')) external.push(u);
     });
     page.on('pageerror', (e) => console.log('pageerror', e.message));
-    await retryOnReload(() => page.waitForTimeout(300), () => openHarness(page));
+    await openHarness(page);
   });
   test.afterEach(() => {
     expect(external).toEqual([]);

@@ -25,30 +25,7 @@ import {
   foreignOdt,
   foreignRtf,
 } from '../../src/engines/pandoc/test-support/office';
-import { assetEvents, progressValues, stageIds } from '../../src/engines/magick/e2e-support';
-import { openHarness as rawOpen, convert as rawConvert, bytes } from './helpers';
-
-/** The shared Vite dev server re-optimises dependencies the first time an engine imports them and reloads the page. */
-const RELOADED = /Execution context was destroyed|interrupted by another navigation|not bound in the connection|Target (page|closed)|navigation/i;
-async function openHarness(page: Page) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await rawOpen(page);
-    } catch (err) {
-      if (attempt >= 3 || !RELOADED.test(String(err))) throw err;
-    }
-  }
-}
-async function convert(page: Page, args: Record<string, unknown>) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await rawConvert(page, args);
-    } catch (err) {
-      if (attempt >= 3 || !RELOADED.test(String(err))) throw err;
-      await openHarness(page);
-    }
-  }
-}
+import { assetEvents, bytes, convert, openHarness, progressValues, stageIds } from './helpers';
 
 const b64 = (b: Uint8Array | string) => Buffer.from(typeof b === 'string' ? strToU8(b) : b).toString('base64');
 
