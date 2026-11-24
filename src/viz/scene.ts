@@ -92,9 +92,32 @@ function approach(cur: number, target: number, dt: number, k: number): number {
   return cur + (target - cur) * (1 - Math.exp(-dt * k));
 }
 
+/**
+ * A container that spans most of the file (EBML Segment, RIFF, a big moov)
+ * says little on its own, so it is drawn as its real children instead, with
+ * any bytes the children don't cover kept as the container itself.
+ */
+function displaySegments(segs: Segment[], size: number, depth = 0): Segment[] {
+  const out: Segment[] = [];
+  for (const s of segs) {
+    const kids = s.children?.filter((k) => k.length > 0) ?? [];
+    if (depth < 2 && s.role === 'container' && kids.length > 1 && s.length / size > 0.2) {
+      const inner = displaySegments([...kids].sort((a, b) => a.offset - b.offset), size, depth + 1);
+      let cur = s.offset;
+      for (const k of inner) {
+        if (k.offset > cur) out.push({ name: s.name, role: 'container', offset: cur, length: k.offset - cur });
+        out.push(k);
+        cur = Math.max(cur, k.offset + k.length);
+      }
+      if (cur < s.offset + s.length) out.push({ name: s.name, role: 'container', offset: cur, length: s.offset + s.length - cur });
+    } else out.push(s);
+  }
+  return out;
+}
+
 function blocksFrom(structure: FileStructure): Block[] {
   const size = Math.max(1, structure.size);
-  const segs = [...structure.segments].sort((a, b) => a.offset - b.offset);
+  const segs = displaySegments([...structure.segments].sort((a, b) => a.offset - b.offset), size);
   const out: Block[] = [];
   let cursor = 0;
   for (const s of segs) {
@@ -119,6 +142,8 @@ function blocksFrom(structure: FileStructure): Block[] {
   }
   return out;
 }
+
+const PAYLOAD: ReadonlySet<SegmentRole> = new Set(['pixels', 'samples', 'text', 'records', 'media']);
 
 /** Groups of adjacent blocks, each becoming one travelling packet. */
 function packetGroups(blocks: Block[]): { f0: number; f1: number; role: SegmentRole }[] {
@@ -177,6 +202,7 @@ export class Scene {
   private lastStageKey = '';
   private intakeStart = 0;
   private lastOutPacket = 0;
+  private payloadReleaseAt = 0;
   private previewCanvas: HTMLCanvasElement | null = null;
   private previewKey: unknown = null;
   private previewShownAt = 0;
@@ -391,7 +417,11 @@ export class Scene {
 
   /* ------------------------------------------------------------ strips */
 
-  private drawStrip(blocks: Block[], y: number, opts: { fill?: number; ghost?: boolean; dimDeparted?: boolean }) {
+  private drawStrip(
+    blocks: Block[],
+    y: number,
+    opts: { fill?: number; ghost?: boolean; dimDeparted?: boolean; readFraction?: (b: Block) => number },
+  ) {
     const c = this.ctx;
     const { stripX, stripW, stripH } = this.L;
     c.fillStyle = '#16171b';
@@ -410,6 +440,14 @@ export class Scene {
       const dim = opts.dimDeparted && b.departed;
       c.fillStyle = rgba(color, (dim ? 0.22 : b.name === 'not inspected' ? 0.18 : 0.92) * b.alpha);
       c.fillRect(b.x, y, w, stripH);
+      // Part of a large segment already consumed by a streaming engine.
+      const rf = !dim && opts.readFraction ? opts.readFraction(b) : 0;
+      if (rf > 0) {
+        c.fillStyle = BG;
+        c.fillRect(b.x, y, w * rf, stripH);
+        c.fillStyle = rgba(color, 0.22 * b.alpha);
+        c.fillRect(b.x, y, w * rf, stripH);
+      }
       if (dim) {
         c.strokeStyle = rgba(color, 0.5 * b.alpha);
         c.strokeRect(b.x + 0.5, y + 0.5, Math.max(0, w - 1), stripH - 1);
@@ -436,10 +474,16 @@ export class Scene {
         c.fillStyle = 'rgba(12,13,15,0.55)';
         c.fillRect(b.x + b.w - 0.5, y, 1, stripH);
       }
-      const label = b.name;
+      const label = b.seg?.count && b.seg.count > 1 ? `${b.name} ×${b.seg.count.toLocaleString()}` : b.name;
       const tw = measure(c, label);
-      if (b.w > tw + 12 && !(opts.dimDeparted && b.departed)) {
-        c.fillStyle = opts.ghost ? rgba(ROLE_COLOR[b.role], 0.8) : 'rgba(12,13,15,0.82)';
+      if (b.w > tw + 12) {
+        const read = opts.dimDeparted && (b.departed || (opts.readFraction?.(b) ?? 0) > 0.02);
+        const underFill = opts.ghost && opts.fill !== undefined && b.x + 6 + tw <= stripX + stripW * opts.fill;
+        c.fillStyle = underFill
+          ? 'rgba(12,13,15,0.82)'
+          : opts.ghost || read
+            ? rgba(labelColor(b.role), read ? 0.7 : 0.8)
+            : 'rgba(12,13,15,0.82)';
         c.fillText(label, b.x + 6, y + stripH / 2 + 0.5);
       }
     }
@@ -494,7 +538,7 @@ export class Scene {
       c.lineTo(cx + 0.5, (y0 + y1) / 2);
       c.lineTo(lx + tw / 2 + 0.5, y1);
       c.stroke();
-      c.fillStyle = rgba(color, 0.95 * b.alpha);
+      c.fillStyle = rgba(labelColor(b.role), 0.95 * b.alpha);
       c.fillText(b.name, lx, labelY);
     }
   }
@@ -539,7 +583,14 @@ export class Scene {
       c.fillText('reading structure…', L.stripX + 8, L.srcY + L.stripH / 2);
       return;
     }
-    this.drawStrip(this.src, L.srcY, { dimDeparted: true });
+    this.drawStrip(this.src, L.srcY, {
+      dimDeparted: true,
+      readFraction: (b) => {
+        let read = 0;
+        for (const g of this.groups) if (g.departed && g.f0 < b.f1 && g.f1 > b.f0) read += Math.min(g.f1, b.f1) - Math.max(g.f0, b.f0);
+        return Math.min(1, read / Math.max(1e-12, b.f1 - b.f0));
+      },
+    });
     this.drawCallouts(this.src, L.srcY, L.srcCalloutY, true);
   }
 
@@ -549,7 +600,7 @@ export class Scene {
     const L = this.L;
     if (!s || !this.out.length) return;
     const final = s.hops[s.hops.length - 1];
-    const writing = final ? final.stages.find((x) => x.status === 'active' && (x.id === 'encode' || x.id === 'package')) : undefined;
+    const writing = final ? writingStage(final) : undefined;
     const finalDone = final?.status === 'done';
     const measured = writing && writing.progress !== null ? writing.progress : null;
     const ghost = !this.outStructure;
@@ -1000,14 +1051,51 @@ export class Scene {
     // 1. Source bytes into the first engine.
     if (hop0 && this.groups.length && (intakeStage || hop0.status === 'done')) {
       if (!this.intakeStart) this.intakeStart = tnow;
-      const measured = intakeStage && (intakeStage.id === 'read' || intakeStage.id === 'decode') && intakeStage.status === 'active' ? intakeStage.progress : null;
-      // Measured read/decode: bytes enter as they are consumed.
-      // Otherwise the engine received the whole file at once: hand it over in file order.
-      const threshold = measured !== null ? measured : Math.min(1, (tnow - this.intakeStart) / (this.reduced ? 1 : 700));
+      // Headers, indexes and metadata go in as soon as the engine starts
+      // reading. Payload (pixels, samples, text, rows) goes in when it is
+      // really consumed:
+      //  - a stage that measures progress -> payload follows that fraction
+      //    (streaming engines such as WebCodecs and FFmpeg);
+      //  - 'read' followed by a later decode/transform stage is a container
+      //    parse, so payload waits for the stage that consumes it;
+      //  - any other running intake stage had the whole file at once, so the
+      //    payload is handed over in file order.
+      const st = hop0.stages;
+      const active = st.find((x) => x.status === 'active');
+      const ai = active ? st.indexOf(active) : -1;
+      const firstIntake = st.findIndex((x) => x.id === 'read' || x.id === 'decode' || x.id === 'transform');
+      let mode: 'hold' | 'measured' | 'release' = 'release';
+      let measured = 0;
+      if (hop0.status !== 'done' && active) {
+        if (active.id === 'read' || active.id === 'decode' || active.id === 'transform') {
+          if (active.progress !== null) {
+            mode = 'measured';
+            measured = active.progress;
+          } else if (active.id === 'read' && st.slice(ai + 1).some((x) => x.id === 'decode' || x.id === 'transform')) {
+            mode = 'hold';
+          }
+        } else if (ai < firstIntake) {
+          mode = 'hold';
+        }
+      }
+      if (mode === 'release' && !this.payloadReleaseAt) this.payloadReleaseAt = tnow;
+      if (mode !== 'release') this.payloadReleaseAt = 0;
+      const timed = Math.min(1, (tnow - this.intakeStart) / (this.reduced ? 1 : 500));
+      const released = this.payloadReleaseAt ? Math.min(1, (tnow - this.payloadReleaseAt) / (this.reduced ? 1 : 700)) : 0;
+      const payloadTotal = this.groups.reduce((a, g) => a + (PAYLOAD.has(g.role) ? g.f1 - g.f0 : 0), 0) || 1;
+      let payloadSeen = 0;
       for (const g of this.groups) {
-        if (g.departed || g.f1 > threshold + 1e-9) continue;
+        const isPayload = PAYLOAD.has(g.role);
+        if (isPayload) payloadSeen += g.f1 - g.f0;
+        if (g.departed) continue;
+        const share = payloadSeen / payloadTotal;
+        const due = isPayload
+          ? mode === 'measured'
+            ? share <= measured + 1e-9
+            : mode === 'release' && share <= released + 1e-9
+          : g.f1 <= timed + 1e-9 || timed >= 1;
+        if (!due) continue;
         g.departed = true;
-        for (const b of this.src) if (b.f1 <= g.f1 + 1e-9 && b.f0 >= g.f0 - 1e-9) b.departed = true;
         for (const b of this.src) if (b.f0 < g.f1 && b.f1 > g.f0 && b.f1 <= g.f1 + 1e-6) b.departed = true;
         if (this.reduced) continue;
         const x0 = L.stripX + ((g.f0 + g.f1) / 2) * L.stripW;
@@ -1029,6 +1117,7 @@ export class Scene {
       }
     } else {
       this.intakeStart = 0;
+      this.payloadReleaseAt = 0;
     }
 
     // 2. Intermediate files between hops (real size from hop-done).
@@ -1055,7 +1144,7 @@ export class Scene {
 
     // 3. Bytes out of the last engine into the output strip while it writes.
     const final = s.hops[s.hops.length - 1];
-    const writing = final?.stages.find((x) => x.status === 'active' && (x.id === 'encode' || x.id === 'package'));
+    const writing = final ? writingStage(final) : undefined;
     if (writing && !this.reduced && tnow - this.lastOutPacket > (writing.progress !== null ? 60 : 140)) {
       this.lastOutPacket = tnow;
       const at = writing.progress !== null ? this.shownFill : Math.random();
@@ -1183,6 +1272,24 @@ function ellipsize(c: CanvasRenderingContext2D, text: string, max: number): stri
 function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   c.beginPath();
   c.roundRect(x, y, w, h, r);
+}
+
+/**
+ * The stage in which the output file is being produced: encode/package, or a
+ * measured transform in a hop that has no separate encode stage (streaming
+ * engines decode, encode and mux in one pass).
+ */
+function writingStage(hop: HopView): StageView | undefined {
+  const active = hop.stages.find((x) => x.status === 'active');
+  if (!active) return undefined;
+  if (active.id === 'encode' || active.id === 'package') return active;
+  if (active.id === 'transform' && active.progress !== null && !hop.stages.some((x) => x.id === 'encode')) return active;
+  return undefined;
+}
+
+/** Neutral roles are drawn dark; their text needs a readable colour. */
+function labelColor(role: SegmentRole): string {
+  return role === 'container' || role === 'padding' || role === 'unknown' ? MUTED : ROLE_COLOR[role];
 }
 
 function calloutPriority(role: SegmentRole): number {
