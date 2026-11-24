@@ -3,7 +3,10 @@ import type { VizState } from './model';
 import { Scene, fmtBytes, type HitResult } from './scene';
 import { DARK, LIGHT, ROLE_LABEL, currentTheme, type Theme } from './palette';
 
-/** React host for the canvas scene: sizing, the rAF loop, reduced motion, tooltips. */
+/**
+ * React host for the canvas scene: sizing, the rAF loop, reduced motion, tooltips.
+ * The loop runs only while the scene reports motion; the scene wakes it on any change.
+ */
 export function XRay({ state, label }: { state: VizState | null; label: string }) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -15,7 +18,24 @@ export function XRay({ state, label }: { state: VizState | null; label: string }
     const cv = canvas.current!;
     const el = wrap.current!;
     const mq = matchMedia('(prefers-reduced-motion: reduce)');
-    const sc = new Scene(cv, mq.matches);
+
+    let raf = 0;
+    let last = 0;
+    let fontsReady = false;
+    let disposed = false;
+    const loop = (t: number) => {
+      raf = 0;
+      const moving = sc.frame(t - last);
+      last = t;
+      if (moving) raf = requestAnimationFrame(loop);
+    };
+    // Draw only once the self-hosted fonts are ready so text metrics are stable.
+    const wake = () => {
+      if (raf || disposed || !fontsReady || document.hidden) return;
+      last = performance.now();
+      raf = requestAnimationFrame(loop);
+    };
+    const sc = new Scene(cv, mq.matches, wake);
     scene.current = sc;
     const onMq = () => sc.setReducedMotion(mq.matches);
     mq.addEventListener('change', onMq);
@@ -38,27 +58,18 @@ export function XRay({ state, label }: { state: VizState | null; label: string }
     const ro = new ResizeObserver(size);
     ro.observe(el);
 
-    let raf = 0;
-    let last = performance.now();
-    const loop = (t: number) => {
-      sc.frame(t - last);
-      last = t;
-      raf = requestAnimationFrame(loop);
-    };
-    // Draw only once the self-hosted fonts are ready so text metrics are stable.
     document.fonts.ready.then(() => {
-      last = performance.now();
-      raf = requestAnimationFrame(loop);
+      fontsReady = true;
+      wake();
     });
     const onVis = () => {
-      if (document.hidden) cancelAnimationFrame(raf);
-      else {
-        last = performance.now();
-        raf = requestAnimationFrame(loop);
-      }
+      if (!document.hidden) return wake();
+      cancelAnimationFrame(raf);
+      raf = 0;
     };
     document.addEventListener('visibilitychange', onVis);
     return () => {
+      disposed = true;
       cancelAnimationFrame(raf);
       ro.disconnect();
       mq.removeEventListener('change', onMq);

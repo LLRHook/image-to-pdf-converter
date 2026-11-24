@@ -87,8 +87,11 @@ function closeActive(h: HopView, at: number, status: StageStatus = 'done') {
   }
 }
 
+/** Runner events the visualiser reduces; engine log lines are diagnostics and never reach it. */
+export type VizEvent = Exclude<RunEvent, { type: 'log' }>;
+
 /** Returns a new top-level object (hops are copied) so React sees the change. */
-export function reduce(prev: VizState, ev: RunEvent, lookupHop: (engine: string, from: FormatId, to: FormatId) => Hop | undefined): VizState {
+export function reduce(prev: VizState, ev: VizEvent, lookupHop: (engine: string, from: FormatId, to: FormatId) => Hop | undefined): VizState {
   const s: VizState = { ...prev, hops: prev.hops.map((h) => ({ ...h, stages: h.stages.map((x) => ({ ...x })), assets: [...h.assets] })) };
   const hop = 'hop' in ev ? s.hops[ev.hop] : undefined;
   switch (ev.type) {
@@ -135,7 +138,7 @@ export function reduce(prev: VizState, ev: RunEvent, lookupHop: (engine: string,
       break;
     }
     case 'progress': {
-      const st = hop?.stages.find((x) => x.status === 'active');
+      const st = hop && runningStage(hop);
       if (st) st.progress = ev.value;
       break;
     }
@@ -165,7 +168,8 @@ export function reduce(prev: VizState, ev: RunEvent, lookupHop: (engine: string,
     case 'done':
       s.phase = 'done';
       s.endedAt = ev.at;
-      s.output = { name: ev.result.name, format: s.route.to, size: ev.result.blob.size, structure: null };
+      // The format really produced: 'zip' when the engine bundled several files.
+      s.output = { name: ev.result.name, format: ev.result.format, size: ev.result.blob.size, structure: null };
       break;
     case 'error':
       if (hop) {
@@ -182,8 +186,6 @@ export function reduce(prev: VizState, ev: RunEvent, lookupHop: (engine: string,
       s.endedAt = ev.at;
       for (const h of s.hops) closeActive(h, ev.at, 'failed');
       break;
-    case 'log':
-      break;
   }
   return s;
 }
@@ -192,9 +194,14 @@ export function withOutputStructure(s: VizState, structure: FileStructure): VizS
   return s.output ? { ...s, output: { ...s.output, structure } } : s;
 }
 
+/** The stage running in one hop, if any. */
+export function runningStage(hop: HopView): StageView | undefined {
+  return hop.stages.find((x) => x.status === 'active');
+}
+
 /** The stage currently running, across hops. */
 export function activeStage(s: VizState): { hop: HopView; stage: StageView } | null {
   const hop = s.hops[s.activeHop];
-  const stage = hop?.stages.find((x) => x.status === 'active');
+  const stage = hop && runningStage(hop);
   return hop && stage ? { hop, stage } : null;
 }

@@ -9,14 +9,18 @@
  * without measurements are drawn as indeterminate (shimmer + elapsed time),
  * never as a filling bar.
  *
- * Fluidity: one rAF loop, time-based exponential smoothing for every moving
- * value (frame-rate independent), cached background and glow sprites, no
- * allocations in the hot path beyond packets.
+ * Fluidity: one rAF loop that sleeps while nothing moves (frame() reports
+ * whether another frame is needed), time-based exponential smoothing for
+ * every moving value (frame-rate independent), cached background and glow
+ * sprites, no allocations in the hot path beyond packets.
  */
 import type { FileStructure, Segment, SegmentRole } from '../core/structure/types';
+import { LIMITS, fmtChannels } from '../core/structure/util';
 import { formatInfo } from '../core/formats';
 import { engineName } from '../core/engineNames';
-import type { VizState, HopView, StageView } from './model';
+import { now } from '../core/clock';
+import type { Facts, Preview, StageId } from '../core/types';
+import { activeStage, runningStage, type VizState, type HopView, type StageView } from './model';
 import { ghostFor } from './templates';
 import { ROLE_LABEL, currentTheme, rgba, type Theme } from './palette';
 
@@ -32,11 +36,14 @@ interface Block {
   alpha: number;
   seg?: Segment;
   departed?: boolean;
-  ghost?: boolean;
+  /** Share of the file (not of the block) already handed to the engine by departed packet groups. */
+  read: number;
 }
 
 interface Packet {
   color: string;
+  /** Outline drawn around the packet on light themes. */
+  outline: string;
   x0: number;
   y0: number;
   cx: number;
@@ -49,13 +56,22 @@ interface Packet {
   label?: string;
 }
 
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+type PreviewOf<K extends Preview['kind']> = Extract<Preview, { kind: K }>;
+
 interface Layout {
   pad: number;
   srcTitleY: number;
   srcCalloutY: number;
   srcY: number;
   stripH: number;
-  chamber: { x: number; y: number; w: number; h: number };
+  chamber: Box;
   outY: number;
   outCalloutY: number;
   outTitleY: number;
@@ -65,7 +81,8 @@ interface Layout {
 }
 
 const MAX_PACKET_GROUPS = 120;
-const now = () => performance.now() + performance.timeOrigin;
+/** Smoothed values closer than this to their target (px, or alpha) count as settled. */
+const SETTLED = 0.005;
 
 export function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -122,11 +139,11 @@ function blocksFrom(structure: FileStructure): Block[] {
   let cursor = 0;
   for (const s of segs) {
     if (s.offset > cursor) {
-      out.push({ name: 'unparsed', role: 'unknown', f0: cursor / size, f1: s.offset / size, x: 0, w: 0, alpha: 1 });
+      out.push({ name: 'unparsed', role: 'unknown', f0: cursor / size, f1: s.offset / size, x: 0, w: 0, alpha: 1, read: 0 });
     }
     const start = Math.max(cursor, s.offset);
     const end = Math.min(size, s.offset + s.length);
-    if (end > start) out.push({ name: s.name, role: s.role, f0: start / size, f1: end / size, x: 0, w: 0, alpha: 1, seg: s });
+    if (end > start) out.push({ name: s.name, role: s.role, f0: start / size, f1: end / size, x: 0, w: 0, alpha: 1, read: 0, seg: s });
     cursor = Math.max(cursor, end);
   }
   if (cursor < size) {
@@ -138,12 +155,30 @@ function blocksFrom(structure: FileStructure): Block[] {
       x: 0,
       w: 0,
       alpha: 1,
+      read: 0,
     });
   }
   return out;
 }
 
+/** Why only part of the file is drawn, as a short aside after the part count ('' when all of it is). */
+export function truncationNote(st: FileStructure): string {
+  if (!st.truncated) return '';
+  switch (st.truncatedBy) {
+    case 'budget':
+      return ` (only the first ${Math.round(LIMITS.budget / 1024 / 1024)} MB were read)`;
+    case 'segments':
+      return ' (too many to list them all)';
+    case 'error':
+      return ' (the rest couldn’t be read)';
+    default:
+      return ' (not all of it was read)';
+  }
+}
+
 const PAYLOAD: ReadonlySet<SegmentRole> = new Set(['pixels', 'samples', 'text', 'records', 'media']);
+/** Stages that take in the source bytes. */
+const INTAKE: ReadonlySet<StageId> = new Set(['read', 'decode', 'transform']);
 
 /** Groups of adjacent blocks, each becoming one travelling packet. */
 function packetGroups(blocks: Block[]): { f0: number; f1: number; role: SegmentRole }[] {
@@ -207,15 +242,26 @@ export class Scene {
   private srcLen = 0;
   private outLen = 0;
   private previewCanvas: HTMLCanvasElement | null = null;
-  private previewKey: unknown = null;
+  /** The latest decoded preview and facts across hops, picked once per state change. */
+  private preview: Preview | null = null;
+  private facts: Facts | null = null;
+  private factLine = '';
   private previewShownAt = 0;
   private framesCanvases: HTMLCanvasElement[] = [];
+  /** Ellipsized grid/outline text for the current preview, box and theme. */
+  private fitted: { preview: Preview; w: number; h: number; th: Theme; rows: string[][] } | null = null;
+  /** Thin-segment label candidates per strip, most interesting first. */
+  private calloutOrder = new WeakMap<Block[], Block[]>();
   private hopPacketSent = new Set<number>();
   private t = 0;
+  /** Set during a frame by anything that still moves, so the host knows to draw another. */
+  private busy = false;
 
   constructor(
     private canvas: HTMLCanvasElement,
     private reduced: boolean,
+    /** Called when the picture changes, so a sleeping host loop can wake up. */
+    private onDirty: () => void = () => {},
   ) {
     this.ctx = canvas.getContext('2d')!;
   }
@@ -227,10 +273,12 @@ export class Scene {
     this.th = th;
     this.bg = null;
     this.glows.clear();
+    this.onDirty();
   }
 
   setReducedMotion(r: boolean) {
     this.reduced = r;
+    this.onDirty();
   }
 
   /**
@@ -246,6 +294,12 @@ export class Scene {
     const outSize = s.output?.structure ? s.output.size : null;
     const max = Math.max(1, s.input.size, outSize ?? 0);
     return { src: (W * s.input.size) / max, out: outSize === null ? (W * s.input.size) / max : (W * outSize) / max };
+  }
+
+  /** Snap a block to its byte range on a strip `len` px long. */
+  private place(b: Block, len: number) {
+    b.x = this.L.stripX + b.f0 * len;
+    b.w = (b.f1 - b.f0) * len;
   }
 
   resize(w: number, h: number, dpr: number) {
@@ -284,19 +338,15 @@ export class Scene {
     const len = this.lengthTargets();
     this.srcLen = len.src;
     this.outLen = len.out;
-    for (const b of this.src) {
-      b.x = this.L.stripX + b.f0 * this.srcLen;
-      b.w = (b.f1 - b.f0) * this.srcLen;
-    }
-    for (const b of this.out) {
-      b.x = this.L.stripX + b.f0 * this.outLen;
-      b.w = (b.f1 - b.f0) * this.outLen;
-    }
+    for (const b of this.src) this.place(b, this.srcLen);
+    for (const b of this.out) this.place(b, this.outLen);
+    this.onDirty();
   }
 
   setState(s: VizState | null) {
     const prev = this.state;
     this.state = s;
+    this.onDirty();
     if (!s) {
       this.reset();
       return;
@@ -306,87 +356,104 @@ export class Scene {
       this.src = blocksFrom(s.input.structure);
       this.srcLen = this.lengthTargets().src;
       for (const b of this.src) {
-        b.x = this.L.stripX + b.f0 * this.srcLen;
-        b.w = this.reduced ? (b.f1 - b.f0) * this.srcLen : 0;
-        b.alpha = this.reduced ? 1 : 0;
+        this.place(b, this.srcLen);
+        if (!this.reduced) {
+          // Segments grow in from their start.
+          b.w = 0;
+          b.alpha = 0;
+        }
       }
       this.groups = packetGroups(this.src).map((g) => ({ ...g, departed: false }));
     }
-    if (prev && prev.startedAt !== s.startedAt) {
-      // New run on the same input: un-read the source.
-      this.groups.forEach((g) => (g.departed = false));
-      for (const b of this.src) b.departed = false;
-      this.packets = [];
-      this.hopPacketSent.clear();
-      this.out = [];
-      this.outStructure = null;
-      this.outGhostKey = '';
-      this.shownFill = 0;
-    }
-    const finalHop = s.hops[s.hops.length - 1];
+    // New run on the same input: un-read the source.
+    if (prev && prev.startedAt !== s.startedAt) this.resetRun();
     const ghostKey = `${s.route.to}:${s.startedAt}`;
     if (this.outGhostKey !== ghostKey && s.hops.length) {
       this.outGhostKey = ghostKey;
-      const parts = ghostFor(s.route.to, false);
+      const parts = ghostFor(s.route.to);
       const total = parts.reduce((a, p) => a + p.weight, 0);
+      const len = this.lengthTargets().out;
       let acc = 0;
       this.out = parts.map((p) => {
         const f0 = acc / total;
         acc += p.weight;
-        const f1 = acc / total;
-        const len = this.lengthTargets().out;
-        return { name: p.name, role: p.role, f0, f1, x: this.L.stripX + f0 * len, w: (f1 - f0) * len, alpha: 0, ghost: true };
+        const b: Block = { name: p.name, role: p.role, f0, f1: acc / total, x: 0, w: 0, alpha: 0, read: 0 };
+        this.place(b, len);
+        return b;
       });
       this.outStructure = null;
     }
     if (s.output?.structure && s.output.structure !== this.outStructure) {
       this.outStructure = s.output.structure;
       const real = blocksFrom(s.output.structure);
+      const len = this.lengthTargets().out;
       // Start each real block where the ghost of the same role was, so the
       // expected layout visibly resolves into the true one.
       for (const b of real) {
+        if (this.reduced) {
+          this.place(b, len);
+          continue;
+        }
         const ghost = this.out.find((o) => o.role === b.role) ?? this.out[this.out.length - 1];
-        const len = this.lengthTargets().out;
-        b.x = this.reduced ? this.L.stripX + b.f0 * len : ghost?.x ?? this.L.stripX;
-        b.w = this.reduced ? (b.f1 - b.f0) * len : ghost?.w ?? 0;
-        b.alpha = 1;
+        b.x = ghost?.x ?? this.L.stripX;
+        b.w = ghost?.w ?? 0;
       }
       this.out = real;
     }
-    const preview = s.hops.map((h) => h.preview).filter(Boolean).at(-1) ?? null;
-    if (preview !== this.previewKey) {
-      this.previewKey = preview;
+    const preview = s.hops.findLast((h) => h.preview)?.preview ?? null;
+    if (preview !== this.preview) {
+      this.preview = preview;
       this.previewCanvas = null;
       this.framesCanvases = [];
+      this.fitted = null;
       this.previewShownAt = performance.now();
       if (preview?.kind === 'pixels') this.previewCanvas = rgbaCanvas(preview.rgba, preview.width, preview.height);
       if (preview?.kind === 'frames')
         this.framesCanvases = preview.frames.map((f) => rgbaCanvas(f, preview.width, preview.height));
     }
-    void finalHop;
+    const facts = s.hops.findLast((h) => h.facts)?.facts ?? null;
+    if (facts !== this.facts) {
+      this.facts = facts;
+      this.factLine = facts ? describeFacts(facts) : '';
+    }
   }
 
-  private reset() {
-    this.src = [];
-    this.srcStructure = null;
-    this.groups = [];
+  /** Forget a run: what was read from the source, packets in flight, the output and its fill. */
+  private resetRun() {
+    for (const g of this.groups) g.departed = false;
+    for (const b of this.src) {
+      b.departed = false;
+      b.read = 0;
+    }
+    this.packets = [];
+    this.hopPacketSent.clear();
     this.out = [];
     this.outStructure = null;
     this.outGhostKey = '';
-    this.packets = [];
     this.shownFill = 0;
+  }
+
+  private reset() {
+    this.resetRun();
+    this.src = [];
+    this.srcStructure = null;
+    this.groups = [];
     this.shownProgress = 0;
     this.previewCanvas = null;
-    this.previewKey = null;
+    this.preview = null;
     this.framesCanvases = [];
-    this.hopPacketSent.clear();
+    this.fitted = null;
+    this.facts = null;
+    this.factLine = '';
   }
 
   /* ------------------------------------------------------------ frame */
 
-  frame(dtMs: number) {
-    const dt = Math.min(0.1, dtMs / 1000);
+  /** Draw one frame. Returns whether anything is still moving; when not, the host may stop until onDirty. */
+  frame(dtMs: number): boolean {
+    const dt = Math.min(0.1, Math.max(0, dtMs / 1000));
     this.t += dt;
+    this.busy = false;
     const c = this.ctx;
     c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.drawBackground();
@@ -395,7 +462,21 @@ export class Scene {
     this.drawSource();
     this.drawChamber(dt);
     this.drawOutput(dt);
-    if (s) this.spawnAndDrawPackets(dt);
+    if (s) {
+      const tnow = performance.now();
+      this.spawnIntake(s, tnow);
+      this.spawnHandoffs(s, tnow);
+      this.spawnWrites(s, tnow);
+      this.drawPackets(tnow);
+    }
+    return this.busy;
+  }
+
+  /** approach(), flagging the frame busy until the value has settled. */
+  private ease(cur: number, target: number, dt: number, k: number, eps = SETTLED): number {
+    const v = approach(cur, target, dt, k);
+    if (Math.abs(target - v) > eps) this.busy = true;
+    return v;
   }
 
   private drawBackground() {
@@ -440,31 +521,28 @@ export class Scene {
   private updateBlocks(dt: number) {
     const k = this.reduced ? 40 : 9;
     const len = this.lengthTargets();
-    this.srcLen = approach(this.srcLen, len.src, dt, this.reduced ? 40 : 4);
-    this.outLen = approach(this.outLen, len.out, dt, this.reduced ? 40 : 4);
+    this.srcLen = this.ease(this.srcLen, len.src, dt, this.reduced ? 40 : 4);
+    this.outLen = this.ease(this.outLen, len.out, dt, this.reduced ? 40 : 4);
+    const x0 = this.L.stripX;
     for (const b of this.src) {
-      const tx = this.L.stripX + b.f0 * this.srcLen;
-      const tw = (b.f1 - b.f0) * this.srcLen;
-      b.x = approach(b.x, tx, dt, k);
-      b.w = approach(b.w, tw, dt, k * 0.8);
-      b.alpha = approach(b.alpha, 1, dt, 6);
+      b.x = this.ease(b.x, x0 + b.f0 * this.srcLen, dt, k);
+      b.w = this.ease(b.w, (b.f1 - b.f0) * this.srcLen, dt, k * 0.8);
+      b.alpha = this.ease(b.alpha, 1, dt, 6, SETTLED / 2);
     }
     for (const b of this.out) {
-      const tx = this.L.stripX + b.f0 * this.outLen;
-      const tw = (b.f1 - b.f0) * this.outLen;
-      b.x = approach(b.x, tx, dt, k);
-      b.w = approach(b.w, tw, dt, k);
-      b.alpha = approach(b.alpha, 1, dt, 5);
+      b.x = this.ease(b.x, x0 + b.f0 * this.outLen, dt, k);
+      b.w = this.ease(b.w, (b.f1 - b.f0) * this.outLen, dt, k);
+      b.alpha = this.ease(b.alpha, 1, dt, 5, SETTLED / 2);
     }
   }
 
   /* ------------------------------------------------------------ strips */
 
-  private drawStrip(
-    blocks: Block[],
-    y: number,
-    opts: { len: number; fill?: number; ghost?: boolean; dimDeparted?: boolean; readFraction?: (b: Block) => number },
-  ) {
+  /**
+   * `fill` (measured output progress) is only given with `ghost`; `consumed`
+   * dims what the source has already handed to the engine.
+   */
+  private drawStrip(blocks: Block[], y: number, opts: { len: number; fill?: number; ghost?: boolean; consumed?: boolean }) {
     const c = this.ctx;
     const { stripX, stripH } = this.L;
     const stripW = opts.len;
@@ -481,9 +559,9 @@ export class Scene {
         c.setLineDash([]);
         continue;
       }
-      const dim = opts.dimDeparted && b.departed;
+      const dim = opts.consumed && b.departed;
       // Part of a large segment already consumed by a streaming engine.
-      const rf = !dim && opts.readFraction ? opts.readFraction(b) : 0;
+      const rf = !dim && opts.consumed ? readFraction(b) : 0;
       const full = (b.name === 'not inspected' ? 0.18 : 0.92) * b.alpha;
       if (dim) {
         c.fillStyle = rgba(color, 0.22 * b.alpha);
@@ -503,7 +581,7 @@ export class Scene {
       }
     }
     // Fill overlay for the output being written (measured only).
-    if (opts.fill !== undefined && opts.ghost) {
+    if (opts.fill !== undefined) {
       const fw = stripW * opts.fill;
       c.save();
       c.beginPath();
@@ -523,11 +601,13 @@ export class Scene {
         c.fillStyle = this.th.name === 'light' ? 'rgba(255,255,255,0.9)' : 'rgba(8,8,14,0.55)';
         c.fillRect(b.x + b.w - 0.5, y, 1, stripH);
       }
+      // A label needs its own width plus 12 px, so thinner blocks never get one.
+      if (b.w <= 12) continue;
       const label = b.seg?.count && b.seg.count > 1 ? `${b.name} ×${b.seg.count.toLocaleString()}` : b.name;
       const tw = measure(c, label);
       if (b.w > tw + 12) {
-        const read = opts.dimDeparted && (b.departed || (opts.readFraction?.(b) ?? 0) > 0.02);
-        const underFill = opts.ghost && opts.fill !== undefined && b.x + 6 + tw <= stripX + stripW * opts.fill;
+        const read = opts.consumed && (b.departed || readFraction(b) > 0.02);
+        const underFill = opts.fill !== undefined && b.x + 6 + tw <= stripX + stripW * opts.fill;
         c.fillStyle = underFill
           ? this.th.onSegment
           : opts.ghost || read
@@ -548,11 +628,16 @@ export class Scene {
     // half are packed left-to-right, labels in the right half right-to-left, so
     // clusters at either end of a file stay next to their segments.
     const max = this.L.compact ? 5 : 10;
-    const picked = blocks
-      .filter((b) => b.w > 0 && b.name !== 'unparsed' && measure(c, b.name) + 12 >= b.w)
-      .sort((a, b) => calloutPriority(b.role) - calloutPriority(a.role) || a.f0 - b.f0)
-      .slice(0, max)
-      .sort((a, b) => a.f0 - b.f0);
+    let order = this.calloutOrder.get(blocks);
+    if (!order) {
+      order = blocks.filter((b) => b.name !== 'unparsed').sort((a, b) => calloutPriority(b.role) - calloutPriority(a.role) || a.f0 - b.f0);
+      this.calloutOrder.set(blocks, order);
+    }
+    const picked: Block[] = [];
+    for (const b of order) {
+      if (b.w > 0 && measure(c, b.name) + 12 >= b.w && picked.push(b) >= max) break;
+    }
+    picked.sort((a, b) => a.f0 - b.f0);
     const left = this.L.stripX;
     const right = left + this.L.stripW;
     const mid = left + this.L.stripW / 2;
@@ -619,6 +704,7 @@ export class Scene {
       c.fillStyle = this.th.track;
       c.fillRect(L.stripX, L.srcY, L.stripW, L.stripH);
       if (!this.reduced) {
+        this.busy = true;
         const x = L.stripX + ((this.t * 0.45) % 1) * L.stripW;
         const grad = c.createLinearGradient(x - 120, 0, x, 0);
         grad.addColorStop(0, rgba(this.th.ink, 0));
@@ -632,15 +718,7 @@ export class Scene {
       c.fillText('reading structure…', L.stripX + 8, L.srcY + L.stripH / 2);
       return;
     }
-    this.drawStrip(this.src, L.srcY, {
-      len: this.srcLen,
-      dimDeparted: true,
-      readFraction: (b) => {
-        let read = 0;
-        for (const g of this.groups) if (g.departed && g.f0 < b.f1 && g.f1 > b.f0) read += Math.min(g.f1, b.f1) - Math.max(g.f0, b.f0);
-        return Math.min(1, read / Math.max(1e-12, b.f1 - b.f0));
-      },
-    });
+    this.drawStrip(this.src, L.srcY, { len: this.srcLen, consumed: true });
     this.drawCallouts(this.src, L.srcY, L.srcCalloutY, true);
   }
 
@@ -654,9 +732,10 @@ export class Scene {
     const finalDone = final?.status === 'done';
     const measured = writing && writing.progress !== null ? writing.progress : null;
     const ghost = !this.outStructure;
-    let targetFill = finalDone ? 1 : measured ?? (writing && writing.status === 'done' ? 1 : this.shownFill);
-    if (!finalDone && !writing) targetFill = this.shownFill;
+    const targetFill = finalDone ? 1 : measured ?? this.shownFill;
     this.shownFill = approach(this.shownFill, targetFill, dt, this.reduced ? 40 : 7);
+    // The fill is only drawn over the ghost, so only there does it need to settle.
+    if (ghost && Math.abs(targetFill - this.shownFill) * this.outLen > SETTLED) this.busy = true;
 
     c.textBaseline = 'alphabetic';
     // Title row.
@@ -664,7 +743,8 @@ export class Scene {
     c.font = this.th.mono(L.compact ? 9 : 10, 500);
     c.fillText('CONVERTED', L.pad, L.outTitleY);
     const labelW = measure(c, 'CONVERTED') + 12;
-    const info = formatInfo(s.route.to);
+    // The produced format once known: a bundle is a ZIP whatever the target was.
+    const info = formatInfo(s.output?.format ?? s.route.to);
     c.fillStyle = s.output ? this.th.ink : this.th.muted;
     c.font = this.th.title(L.compact ? 17 : 21);
     const outName = s.output?.name ?? `New ${info.label} file`;
@@ -715,7 +795,7 @@ export class Scene {
       c.fillText(ellipsize(c, summary, ch.w - 40), x0, ch.y + (L.compact ? 72 : 84));
       if (this.srcStructure) {
         c.fillText(
-          `${this.srcStructure.segments.length.toLocaleString()} parts${this.srcStructure.truncated ? ' (only the first 8 MB were read)' : ''}. Pick a format below.`,
+          `${this.srcStructure.segments.length.toLocaleString()} parts${truncationNote(this.srcStructure)}. Pick a format below.`,
           x0,
           ch.y + (L.compact ? 90 : 104),
         );
@@ -734,7 +814,9 @@ export class Scene {
       c.textBaseline = 'alphabetic';
       return;
     }
-    const active = hop.stages.find((x) => x.status === 'active');
+    // Elapsed time, meters, shimmer and the engine core move for as long as the run does.
+    if (s.phase === 'running') this.busy = true;
+    const active = activeStage(s)?.stage;
     const t = now();
     const inner = { x: ch.x + 20, y: ch.y + 16, w: ch.w - 40, h: ch.h - 32 };
 
@@ -779,11 +861,10 @@ export class Scene {
     c.fillStyle = s.phase === 'error' ? this.th.danger : this.th.muted;
     c.fillText(ellipsize(c, sub, inner.w * (L.compact ? 1 : 0.5)), inner.x, titleY + 22);
 
-    // Fallback notice.
+    // Fallback notice. Engines fall back for many reasons (missing codec, unsupported input), so no reason is guessed.
     if (hop.fallbacks.length && s.phase === 'running') {
-      const fb = hop.fallbacks[hop.fallbacks.length - 1]!;
       c.fillStyle = rgba(this.th.notice, 0.9);
-      c.fillText(ellipsize(c, `Switched to ${engineName(hop.engine)}: ${engineName(fb.fromEngine)} can’t do this in this browser`, inner.w * 0.5), inner.x, titleY + 40);
+      c.fillText(ellipsize(c, `Switched to ${engineName(hop.engine)} for this file.`, inner.w * 0.5), inner.x, titleY + 40);
     }
 
     // Progress row (measured) or indeterminate meter.
@@ -800,7 +881,7 @@ export class Scene {
     const ir = L.compact
       ? { x: inner.x, y: titleY + 52, w: inner.w, h: barY - (titleY + 52) - 14 }
       : { x: inner.x + inner.w * 0.5, y: inner.y + 30, w: inner.w * 0.5, h: inner.h - 30 };
-    if (ir.h > 40) this.drawRepresentation(s, hop, ir);
+    if (ir.h > 40) this.drawRepresentation(s, ir);
   }
 
   /**
@@ -972,152 +1053,182 @@ export class Scene {
     c.fillText(slowest ? `Slowest step: ${slowest.label} (${fmtMs(slowest.endedAt! - slowest.startedAt!)})` : '', x, y + 18);
   }
 
-  private drawRepresentation(s: VizState, hop: HopView, r: { x: number; y: number; w: number; h: number }) {
+  /* ------------------------------------------------------------ representation */
+
+  /** The decoded in-between data: a preview when the engine sent one, else its key fact, else the engine core. */
+  private drawRepresentation(s: VizState, r: Box) {
     const c = this.ctx;
-    const facts = s.hops.map((h) => h.facts).filter(Boolean).at(-1) ?? null;
-    const preview = s.hops.map((h) => h.preview).filter(Boolean).at(-1) ?? null;
-    const labelY = r.y + r.h - 4;
     c.font = this.th.mono(10, 500);
     c.textBaseline = 'alphabetic';
-    const factLine = facts ? describeFacts(facts) : '';
-    const reveal = this.reduced ? 1 : Math.min(1, (performance.now() - this.previewShownAt) / 650);
     const box = { x: r.x, y: r.y, w: r.w, h: r.h - 22 };
+    const p = this.preview;
+    let caption = this.factLine;
+    if (p?.kind === 'pixels' && this.previewCanvas) {
+      this.drawPixels(p, this.previewCanvas, box);
+      caption = `${this.factLine}${this.facts ? ' · ' : ''}preview from the decoded pixels`;
+    } else if (p?.kind === 'frames' && this.framesCanvases.length) this.drawFrames(p, box);
+    else if (p?.kind === 'waveform') this.drawWaveform(p, box);
+    else if (p?.kind === 'outline') this.drawOutline(p, box);
+    else if (p?.kind === 'grid') this.drawGrid(p, box);
+    else if (this.facts) this.drawBigFact(this.facts, box);
+    else {
+      this.drawCore(s, box);
+      return;
+    }
+    c.font = this.th.mono(10, 500);
+    c.fillStyle = this.th.muted;
+    c.textAlign = 'right';
+    c.fillText(caption, box.x + box.w, r.y + r.h - 4);
+    c.textAlign = 'left';
+  }
 
-    if (preview?.kind === 'pixels' && this.previewCanvas) {
-      const scale = Math.min(box.w / preview.width, box.h / preview.height);
-      const dw = preview.width * scale;
-      const dh = preview.height * scale;
-      const dx = box.x + box.w - dw;
-      const dy = box.y + (box.h - dh) / 2;
-      c.save();
+  /** How far the current preview has unfolded (0..1, over 650 ms); keeps frames coming until it has. */
+  private reveal(): number {
+    const v = this.reduced ? 1 : Math.min(1, (performance.now() - this.previewShownAt) / 650);
+    if (v < 1) this.busy = true;
+    return v;
+  }
+
+  /** Ellipsized preview text, recomputed only when the preview, its box or the theme changes. */
+  private fit(p: Preview, box: Box, build: () => string[][]): string[][] {
+    const f = this.fitted;
+    if (f && f.preview === p && f.w === box.w && f.h === box.h && f.th === this.th) return f.rows;
+    const rows = build();
+    this.fitted = { preview: p, w: box.w, h: box.h, th: this.th, rows };
+    return rows;
+  }
+
+  private drawPixels(p: PreviewOf<'pixels'>, img: HTMLCanvasElement, box: Box) {
+    const c = this.ctx;
+    const reveal = this.reveal();
+    const scale = Math.min(box.w / p.width, box.h / p.height);
+    const dw = p.width * scale;
+    const dh = p.height * scale;
+    const dx = box.x + box.w - dw;
+    const dy = box.y + (box.h - dh) / 2;
+    c.save();
+    c.beginPath();
+    c.rect(dx, dy, dw, dh * easeOut(reveal));
+    c.clip();
+    c.imageSmoothingEnabled = false;
+    c.drawImage(img, dx, dy, dw, dh);
+    // Pixel grid: each cell is one real sampled pixel.
+    if (scale >= 5) {
+      c.strokeStyle = this.th.name === 'light' ? 'rgba(255,255,255,0.55)' : 'rgba(8,8,14,0.4)';
+      c.lineWidth = 1;
       c.beginPath();
-      c.rect(dx, dy, dw, dh * easeOut(reveal));
-      c.clip();
-      c.imageSmoothingEnabled = false;
-      c.drawImage(this.previewCanvas, dx, dy, dw, dh);
-      // Pixel grid: each cell is one real sampled pixel.
-      if (scale >= 5) {
-        c.strokeStyle = this.th.name === 'light' ? 'rgba(255,255,255,0.55)' : 'rgba(8,8,14,0.4)';
-        c.lineWidth = 1;
-        c.beginPath();
-        for (let i = 1; i < preview.width; i++) {
-          c.moveTo(Math.round(dx + i * scale) + 0.5, dy);
-          c.lineTo(Math.round(dx + i * scale) + 0.5, dy + dh);
-        }
-        for (let j = 1; j < preview.height; j++) {
-          c.moveTo(dx, Math.round(dy + j * scale) + 0.5);
-          c.lineTo(dx + dw, Math.round(dy + j * scale) + 0.5);
-        }
-        c.stroke();
+      for (let i = 1; i < p.width; i++) {
+        c.moveTo(Math.round(dx + i * scale) + 0.5, dy);
+        c.lineTo(Math.round(dx + i * scale) + 0.5, dy + dh);
       }
-      c.restore();
-      if (!this.reduced && reveal < 1) {
-        c.fillStyle = rgba(this.th.role.pixels, 0.7);
-        c.fillRect(dx, dy + dh * easeOut(reveal), dw, 1.5);
+      for (let j = 1; j < p.height; j++) {
+        c.moveTo(dx, Math.round(dy + j * scale) + 0.5);
+        c.lineTo(dx + dw, Math.round(dy + j * scale) + 0.5);
       }
-      c.fillStyle = this.th.muted;
-      c.textAlign = 'right';
-      c.fillText(`${factLine}${facts ? ' · ' : ''}preview from the decoded pixels`, box.x + box.w, labelY);
-      c.textAlign = 'left';
-      return;
+      c.stroke();
     }
-    if (preview?.kind === 'frames' && this.framesCanvases.length) {
-      const n = this.framesCanvases.length;
-      const gap = 6;
-      const fw = Math.min((box.w - gap * (n - 1)) / n, (box.h - 16) * (preview.width / preview.height));
-      const fh = fw * (preview.height / preview.width);
-      const total = fw * n + gap * (n - 1);
-      const x0 = box.x + box.w - total;
-      const y0 = box.y + (box.h - fh) / 2;
-      this.framesCanvases.forEach((fc, i) => {
-        const a = Math.min(1, Math.max(0, reveal * n - i));
-        c.globalAlpha = a;
-        c.imageSmoothingEnabled = true;
-        c.drawImage(fc, x0 + i * (fw + gap), y0, fw, fh);
-        c.fillStyle = this.th.muted;
-        c.font = this.th.mono(9, 500);
-        c.fillText(fmtDuration(preview.times[i] ?? 0), x0 + i * (fw + gap), y0 + fh + 12);
-        c.globalAlpha = 1;
-      });
-      c.font = this.th.mono(10, 500);
-      c.fillStyle = this.th.muted;
-      c.textAlign = 'right';
-      c.fillText(factLine, box.x + box.w, labelY);
-      c.textAlign = 'left';
-      return;
+    c.restore();
+    if (!this.reduced && reveal < 1) {
+      c.fillStyle = rgba(this.th.role.pixels, 0.7);
+      c.fillRect(dx, dy + dh * easeOut(reveal), dw, 1.5);
     }
-    if (preview?.kind === 'waveform') {
-      const n = preview.peaks.length;
-      const bw = box.w / n;
-      const mid = box.y + box.h / 2;
-      c.fillStyle = rgba(this.th.role.samples, 0.9);
-      for (let i = 0; i < n; i++) {
-        if (i / n > reveal) break;
-        const p = preview.peaks[i] ?? 0;
-        const hh = Math.max(1, p * box.h * 0.48);
-        c.fillRect(box.x + i * bw, mid - hh, Math.max(1, bw - 1), hh * 2);
-      }
+  }
+
+  private drawFrames(p: PreviewOf<'frames'>, box: Box) {
+    const c = this.ctx;
+    const reveal = this.reveal();
+    const n = this.framesCanvases.length;
+    const gap = 6;
+    const fw = Math.min((box.w - gap * (n - 1)) / n, (box.h - 16) * (p.width / p.height));
+    const fh = fw * (p.height / p.width);
+    const total = fw * n + gap * (n - 1);
+    const x0 = box.x + box.w - total;
+    const y0 = box.y + (box.h - fh) / 2;
+    this.framesCanvases.forEach((fc, i) => {
+      const a = Math.min(1, Math.max(0, reveal * n - i));
+      c.globalAlpha = a;
+      c.imageSmoothingEnabled = true;
+      c.drawImage(fc, x0 + i * (fw + gap), y0, fw, fh);
       c.fillStyle = this.th.muted;
-      c.textAlign = 'right';
-      c.fillText(factLine, box.x + box.w, labelY);
-      c.textAlign = 'left';
-      return;
-    }
-    if (preview?.kind === 'outline') {
-      const lineH = 14;
-      const rows = Math.min(preview.items.length, Math.floor(box.h / lineH));
-      c.font = this.th.mono(10, 500);
-      for (let i = 0; i < rows; i++) {
-        if (i / rows > reveal) break;
-        const it = preview.items[i]!;
-        const y = box.y + i * lineH + 10;
-        const indent = Math.min(4, it.level) * 12;
-        const color = it.level > 0 ? this.th.role.header : this.th.role.text;
-        c.fillStyle = rgba(color, 0.9);
-        c.fillRect(box.x + indent, y - 7, 3, 9);
-        c.fillStyle = it.level > 0 ? this.th.ink : this.th.muted;
-        c.fillText(ellipsize(c, it.text, box.w - indent - 12), box.x + indent + 9, y);
-      }
-      c.fillStyle = this.th.muted;
-      c.textAlign = 'right';
-      c.fillText(factLine, box.x + box.w, labelY);
-      c.textAlign = 'left';
-      return;
-    }
-    if (preview?.kind === 'grid') {
-      const rows = preview.rows.slice(0, Math.floor(box.h / 16));
-      const cols = Math.max(1, ...rows.map((r) => r.length));
-      const cw = box.w / cols;
       c.font = this.th.mono(9, 500);
-      rows.forEach((row, i) => {
-        if (i / rows.length > reveal) return;
-        const y = box.y + i * 16;
-        row.forEach((cell, j) => {
-          c.fillStyle = i === 0 ? rgba(this.th.role.header, 0.12) : rgba(this.th.ink, 0.04);
-          c.fillRect(box.x + j * cw, y, cw - 2, 14);
-          c.fillStyle = i === 0 ? this.th.role.header : this.th.ink;
-          c.fillText(ellipsize(c, cell, cw - 8), box.x + j * cw + 4, y + 10);
-        });
+      c.fillText(fmtDuration(p.times[i] ?? 0), x0 + i * (fw + gap), y0 + fh + 12);
+      c.globalAlpha = 1;
+    });
+  }
+
+  private drawWaveform(p: PreviewOf<'waveform'>, box: Box) {
+    const c = this.ctx;
+    const reveal = this.reveal();
+    const n = p.peaks.length;
+    const bw = box.w / n;
+    const mid = box.y + box.h / 2;
+    c.fillStyle = rgba(this.th.role.samples, 0.9);
+    for (let i = 0; i < n; i++) {
+      if (i / n > reveal) break;
+      const v = p.peaks[i] ?? 0;
+      const hh = Math.max(1, v * box.h * 0.48);
+      c.fillRect(box.x + i * bw, mid - hh, Math.max(1, bw - 1), hh * 2);
+    }
+  }
+
+  private drawOutline(p: PreviewOf<'outline'>, box: Box) {
+    const c = this.ctx;
+    const reveal = this.reveal();
+    const lineH = 14;
+    c.font = this.th.mono(10, 500);
+    const lines = this.fit(p, box, () =>
+      p.items.slice(0, Math.floor(box.h / lineH)).map((it) => [ellipsize(c, it.text, box.w - Math.min(4, it.level) * 12 - 12)]),
+    );
+    const rows = lines.length;
+    for (let i = 0; i < rows; i++) {
+      if (i / rows > reveal) break;
+      const it = p.items[i]!;
+      const y = box.y + i * lineH + 10;
+      const indent = Math.min(4, it.level) * 12;
+      const color = it.level > 0 ? this.th.role.header : this.th.role.text;
+      c.fillStyle = rgba(color, 0.9);
+      c.fillRect(box.x + indent, y - 7, 3, 9);
+      c.fillStyle = it.level > 0 ? this.th.ink : this.th.muted;
+      c.fillText(lines[i]![0]!, box.x + indent + 9, y);
+    }
+  }
+
+  private drawGrid(p: PreviewOf<'grid'>, box: Box) {
+    const c = this.ctx;
+    const reveal = this.reveal();
+    c.font = this.th.mono(9, 500);
+    const cells = this.fit(p, box, () => {
+      const rows = p.rows.slice(0, Math.floor(box.h / 16));
+      const cw = box.w / Math.max(1, ...rows.map((r) => r.length));
+      return rows.map((row) => row.map((cell) => ellipsize(c, cell, cw - 8)));
+    });
+    let cols = 1;
+    for (const row of cells) cols = Math.max(cols, row.length);
+    const cw = box.w / cols;
+    cells.forEach((row, i) => {
+      if (i / cells.length > reveal) return;
+      const y = box.y + i * 16;
+      row.forEach((text, j) => {
+        c.fillStyle = i === 0 ? rgba(this.th.role.header, 0.12) : rgba(this.th.ink, 0.04);
+        c.fillRect(box.x + j * cw, y, cw - 2, 14);
+        c.fillStyle = i === 0 ? this.th.role.header : this.th.ink;
+        c.fillText(text, box.x + j * cw + 4, y + 10);
       });
-      c.font = this.th.mono(10, 500);
-      c.fillStyle = this.th.muted;
-      c.textAlign = 'right';
-      c.fillText(factLine, box.x + box.w, labelY);
-      c.textAlign = 'left';
-      return;
-    }
-    if (facts) {
-      c.textAlign = 'right';
-      c.fillStyle = this.th.ink;
-      c.font = this.th.title(this.L.compact ? 22 : 30);
-      c.fillText(bigFact(facts), box.x + box.w, box.y + box.h / 2 + 8);
-      c.font = this.th.mono(10, 500);
-      c.fillStyle = this.th.muted;
-      c.fillText(factLine, box.x + box.w, labelY);
-      c.textAlign = 'left';
-      return;
-    }
-    // Nothing decoded yet: an engine core, rotating only while work is running.
+    });
+  }
+
+  private drawBigFact(facts: Facts, box: Box) {
+    const c = this.ctx;
+    c.textAlign = 'right';
+    c.fillStyle = this.th.ink;
+    c.font = this.th.title(this.L.compact ? 22 : 30);
+    c.fillText(bigFact(facts), box.x + box.w, box.y + box.h / 2 + 8);
+    c.textAlign = 'left';
+  }
+
+  /** Nothing decoded yet: an engine core, moving only while work is running. */
+  private drawCore(s: VizState, box: Box) {
+    const c = this.ctx;
     const cx = box.x + box.w - Math.min(box.w, box.h) / 2;
     const cy = box.y + box.h / 2;
     const rad = Math.min(box.w, box.h) * 0.32;
@@ -1150,93 +1261,104 @@ export class Scene {
       c.arc(cx, cy, r, 0, Math.PI * 2);
       c.fill();
     }
-    void hop;
   }
 
   /* ------------------------------------------------------------ packets */
 
-  private spawnAndDrawPackets(dt: number) {
-    const s = this.state!;
-    const c = this.ctx;
+  /** 1. Source bytes into the first engine. */
+  private spawnIntake(s: VizState, tnow: number) {
     const L = this.L;
     const ch = L.chamber;
-    const tnow = performance.now();
     const hop0 = s.hops[0];
-    const intakeStage = hop0?.stages.find((x) => (x.id === 'read' || x.id === 'decode' || x.id === 'transform' || x.id === 'encode') && x.status !== 'pending');
-
-    // 1. Source bytes into the first engine.
-    if (hop0 && this.groups.length && (intakeStage || hop0.status === 'done')) {
-      if (!this.intakeStart) this.intakeStart = tnow;
-      // Headers, indexes and metadata go in as soon as the engine starts
-      // reading. Payload (pixels, samples, text, rows) goes in when it is
-      // really consumed:
-      //  - a stage that measures progress -> payload follows that fraction
-      //    (streaming engines such as WebCodecs and FFmpeg);
-      //  - 'read' followed by a later decode/transform stage is a container
-      //    parse, so payload waits for the stage that consumes it;
-      //  - any other running intake stage had the whole file at once, so the
-      //    payload is handed over in file order.
-      const st = hop0.stages;
-      const active = st.find((x) => x.status === 'active');
-      const ai = active ? st.indexOf(active) : -1;
-      const firstIntake = st.findIndex((x) => x.id === 'read' || x.id === 'decode' || x.id === 'transform');
-      let mode: 'hold' | 'measured' | 'release' = 'release';
-      let measured = 0;
-      if (hop0.status !== 'done' && active) {
-        if (active.id === 'read' || active.id === 'decode' || active.id === 'transform') {
-          if (active.progress !== null) {
-            mode = 'measured';
-            measured = active.progress;
-          } else if (active.id === 'read' && st.slice(ai + 1).some((x) => x.id === 'decode' || x.id === 'transform')) {
-            mode = 'hold';
-          }
-        } else if (ai < firstIntake) {
-          mode = 'hold';
-        }
-      }
-      if (mode === 'release' && !this.payloadReleaseAt) this.payloadReleaseAt = tnow;
-      if (mode !== 'release') this.payloadReleaseAt = 0;
-      const timed = Math.min(1, (tnow - this.intakeStart) / (this.reduced ? 1 : 500));
-      const released = this.payloadReleaseAt ? Math.min(1, (tnow - this.payloadReleaseAt) / (this.reduced ? 1 : 700)) : 0;
-      const payloadTotal = this.groups.reduce((a, g) => a + (PAYLOAD.has(g.role) ? g.f1 - g.f0 : 0), 0) || 1;
-      let payloadSeen = 0;
-      for (const g of this.groups) {
-        const isPayload = PAYLOAD.has(g.role);
-        if (isPayload) payloadSeen += g.f1 - g.f0;
-        if (g.departed) continue;
-        const share = payloadSeen / payloadTotal;
-        const due = isPayload
-          ? mode === 'measured'
-            ? share <= measured + 1e-9
-            : mode === 'release' && share <= released + 1e-9
-          : g.f1 <= timed + 1e-9 || timed >= 1;
-        if (!due) continue;
-        g.departed = true;
-        for (const b of this.src) if (b.f0 < g.f1 && b.f1 > g.f0 && b.f1 <= g.f1 + 1e-6) b.departed = true;
-        if (this.reduced) continue;
-        const x0 = L.stripX + ((g.f0 + g.f1) / 2) * this.srcLen;
-        const y0 = L.srcY + L.stripH / 2;
-        const x1 = ch.x + ch.w / 2 + (Math.random() - 0.5) * 60;
-        const y1 = ch.y + 6;
-        this.packets.push({
-          color: this.th.role[g.role],
-          x0,
-          y0,
-          cx: x0 + (x1 - x0) * 0.15,
-          cy: (y0 + y1) / 2 + 20,
-          x1,
-          y1,
-          t0: tnow,
-          dur: 620 + Math.random() * 260,
-          w0: Math.min(14, Math.max(4, (g.f1 - g.f0) * this.srcLen)),
-        });
-      }
-    } else {
+    const started = hop0?.stages.some((x) => (INTAKE.has(x.id) || x.id === 'encode') && x.status !== 'pending');
+    if (!hop0 || !this.groups.length || !(started || hop0.status === 'done')) {
       this.intakeStart = 0;
       this.payloadReleaseAt = 0;
+      return;
     }
+    if (!this.intakeStart) this.intakeStart = tnow;
+    // Headers, indexes and metadata go in as soon as the engine starts
+    // reading. Payload (pixels, samples, text, rows) goes in when it is
+    // really consumed:
+    //  - a stage that measures progress -> payload follows that fraction
+    //    (streaming engines such as WebCodecs and FFmpeg);
+    //  - 'read' followed by a later decode/transform stage is a container
+    //    parse, so payload waits for the stage that consumes it;
+    //  - any other running intake stage had the whole file at once, so the
+    //    payload is handed over in file order.
+    const st = hop0.stages;
+    const active = runningStage(hop0);
+    const ai = active ? st.indexOf(active) : -1;
+    const firstIntake = st.findIndex((x) => INTAKE.has(x.id));
+    let mode: 'hold' | 'measured' | 'release' = 'release';
+    let measured = 0;
+    if (hop0.status !== 'done' && active) {
+      if (INTAKE.has(active.id)) {
+        if (active.progress !== null) {
+          mode = 'measured';
+          measured = active.progress;
+        } else if (active.id === 'read' && st.slice(ai + 1).some((x) => x.id !== 'read' && INTAKE.has(x.id))) {
+          mode = 'hold';
+        }
+      } else if (ai < firstIntake) {
+        mode = 'hold';
+      }
+    }
+    if (mode === 'release' && !this.payloadReleaseAt) this.payloadReleaseAt = tnow;
+    if (mode !== 'release') this.payloadReleaseAt = 0;
+    const timed = Math.min(1, (tnow - this.intakeStart) / (this.reduced ? 1 : 500));
+    const released = this.payloadReleaseAt ? Math.min(1, (tnow - this.payloadReleaseAt) / (this.reduced ? 1 : 700)) : 0;
+    const payloadTotal = this.groups.reduce((a, g) => a + (PAYLOAD.has(g.role) ? g.f1 - g.f0 : 0), 0) || 1;
+    let payloadSeen = 0;
+    let waiting = false;
+    for (const g of this.groups) {
+      const isPayload = PAYLOAD.has(g.role);
+      if (isPayload) payloadSeen += g.f1 - g.f0;
+      if (g.departed) continue;
+      const share = payloadSeen / payloadTotal;
+      const due = isPayload
+        ? mode === 'measured'
+          ? share <= measured + 1e-9
+          : mode === 'release' && share <= released + 1e-9
+        : g.f1 <= timed + 1e-9 || timed >= 1;
+      if (!due) {
+        waiting = true;
+        continue;
+      }
+      g.departed = true;
+      for (const b of this.src) {
+        if (b.f0 < g.f1 && b.f1 > g.f0) {
+          b.read += Math.min(g.f1, b.f1) - Math.max(g.f0, b.f0);
+          if (b.f1 <= g.f1 + 1e-6) b.departed = true;
+        }
+      }
+      if (this.reduced) continue;
+      const x0 = L.stripX + ((g.f0 + g.f1) / 2) * this.srcLen;
+      const y0 = L.srcY + L.stripH / 2;
+      const x1 = ch.x + ch.w / 2 + (Math.random() - 0.5) * 60;
+      const y1 = ch.y + 6;
+      const color = this.th.role[g.role];
+      this.packets.push({
+        color,
+        outline: rgba(color, 0.9),
+        x0,
+        y0,
+        cx: x0 + (x1 - x0) * 0.15,
+        cy: (y0 + y1) / 2 + 20,
+        x1,
+        y1,
+        t0: tnow,
+        dur: 620 + Math.random() * 260,
+        w0: Math.min(14, Math.max(4, (g.f1 - g.f0) * this.srcLen)),
+      });
+    }
+    // Bytes still to hand over keep the frames coming.
+    if (waiting) this.busy = true;
+  }
 
-    // 2. Intermediate files between hops (real size from hop-done).
+  /** 2. Intermediate files between hops (real size from hop-done). */
+  private spawnHandoffs(s: VizState, tnow: number) {
+    const ch = this.L.chamber;
     s.hops.forEach((h, i) => {
       if (i === s.hops.length - 1 || h.status !== 'done' || this.hopPacketSent.has(i)) return;
       this.hopPacketSent.add(i);
@@ -1245,6 +1367,7 @@ export class Scene {
       const y0 = ch.y + ch.h - 4;
       this.packets.push({
         color: this.th.accent,
+        outline: rgba(this.th.accent, 0.9),
         x0,
         y0,
         cx: ch.x + ch.w + 40,
@@ -1257,24 +1380,30 @@ export class Scene {
         label: `${formatInfo(h.to).label} ${fmtBytes(h.outSize ?? 0)}`,
       });
     });
+  }
 
-    // 3. Bytes out of the last engine into the output strip while it writes.
+  /** 3. Bytes out of the last engine into the output strip while it writes. */
+  private spawnWrites(s: VizState, tnow: number) {
+    const L = this.L;
+    const ch = L.chamber;
     const final = s.hops[s.hops.length - 1];
     const writing = final ? writingStage(final) : undefined;
-    if (writing && !this.reduced && tnow - this.lastOutPacket > (writing.progress !== null ? 60 : 140)) {
-      this.lastOutPacket = tnow;
-      const at = writing.progress !== null ? this.shownFill : Math.random();
-      const part = this.out.find((b) => at >= b.f0 && at <= b.f1) ?? this.out[0];
-      if (part) {
-        const x0 = ch.x + ch.w / 2 + (Math.random() - 0.5) * 50;
-        const y0 = ch.y + ch.h - 6;
-        const x1 = L.stripX + at * this.outLen;
-        const y1 = L.outY + L.stripH / 2;
-        this.packets.push({ color: this.th.role[part.role], x0, y0, cx: x1, cy: (y0 + y1) / 2 - 10, x1, y1, t0: tnow, dur: 560, w0: 6 });
-      }
-    }
+    if (!writing || this.reduced || tnow - this.lastOutPacket <= (writing.progress !== null ? 60 : 140)) return;
+    this.lastOutPacket = tnow;
+    const at = writing.progress !== null ? this.shownFill : Math.random();
+    const part = this.out.find((b) => at >= b.f0 && at <= b.f1) ?? this.out[0];
+    if (!part) return;
+    const x0 = ch.x + ch.w / 2 + (Math.random() - 0.5) * 50;
+    const y0 = ch.y + ch.h - 6;
+    const x1 = L.stripX + at * this.outLen;
+    const y1 = L.outY + L.stripH / 2;
+    const color = this.th.role[part.role];
+    this.packets.push({ color, outline: rgba(color, 0.9), x0, y0, cx: x1, cy: (y0 + y1) / 2 - 10, x1, y1, t0: tnow, dur: 560, w0: 6 });
+  }
 
-    // Draw.
+  private drawPackets(tnow: number) {
+    if (!this.packets.length) return;
+    const c = this.ctx;
     c.save();
     const blend = this.th.additive ? 'lighter' : 'source-over';
     c.globalCompositeOperation = blend;
@@ -1285,21 +1414,19 @@ export class Scene {
       if (u >= 1) continue;
       alive.push(p);
       const e = easeInOut(Math.max(0, u));
-      const inv = 1 - e;
-      const x = inv * inv * p.x0 + 2 * inv * e * p.cx + e * e * p.x1;
-      const y = inv * inv * p.y0 + 2 * inv * e * p.cy + e * e * p.y1;
+      const x = bezier(p.x0, p.cx, p.x1, e);
+      const y = bezier(p.y0, p.cy, p.y1, e);
       const w = p.w0 * (1 - 0.6 * e);
       const a = u < 0.1 ? u / 0.1 : u > 0.85 ? (1 - u) / 0.15 : 1;
       // Comet trail along the same curve: the flow reads as a ribbon.
+      c.strokeStyle = p.color;
       let px = x;
       let py = y;
       for (let k = 1; k <= 6; k++) {
         const ek = easeInOut(Math.max(0, u - k * 0.022));
-        const ik = 1 - ek;
-        const tx = ik * ik * p.x0 + 2 * ik * ek * p.cx + ek * ek * p.x1;
-        const ty = ik * ik * p.y0 + 2 * ik * ek * p.cy + ek * ek * p.y1;
+        const tx = bezier(p.x0, p.cx, p.x1, ek);
+        const ty = bezier(p.y0, p.cy, p.y1, ek);
         c.globalAlpha = a * (0.5 - k * 0.07);
-        c.strokeStyle = p.color;
         c.lineWidth = Math.max(1, 4.5 - k * 0.6);
         c.beginPath();
         c.moveTo(px, py);
@@ -1316,7 +1443,7 @@ export class Scene {
       roundRect(c, x - w / 2, y - 3, w, 6, 3);
       c.fill();
       if (!this.th.additive) {
-        c.strokeStyle = rgba(p.color, 0.9);
+        c.strokeStyle = p.outline;
         c.lineWidth = 1;
         c.stroke();
       }
@@ -1330,7 +1457,7 @@ export class Scene {
     }
     c.restore();
     this.packets = alive;
-    void dt;
+    if (alive.length) this.busy = true;
   }
 
   /** Neutral roles are drawn faint; their text needs a readable colour. */
@@ -1416,6 +1543,11 @@ function ellipsize(c: CanvasRenderingContext2D, text: string, max: number): stri
   return text.slice(0, lo) + '…';
 }
 
+/** Share of a block already handed to the engine. */
+function readFraction(b: Block): number {
+  return Math.min(1, b.read / Math.max(1e-12, b.f1 - b.f0));
+}
+
 function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   c.beginPath();
   c.roundRect(x, y, w, h, r);
@@ -1427,7 +1559,7 @@ function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number,
  * engines decode, encode and mux in one pass).
  */
 function writingStage(hop: HopView): StageView | undefined {
-  const active = hop.stages.find((x) => x.status === 'active');
+  const active = runningStage(hop);
   if (!active) return undefined;
   if (active.id === 'encode' || active.id === 'package') return active;
   if (active.id === 'transform' && active.progress !== null && !hop.stages.some((x) => x.id === 'encode')) return active;
@@ -1454,10 +1586,16 @@ function calloutPriority(role: SegmentRole): number {
   }
 }
 
+/** One coordinate of a quadratic Bézier from a via b to c at t. */
+function bezier(a: number, b: number, c: number, t: number): number {
+  const i = 1 - t;
+  return i * i * a + 2 * i * t * b + t * t * c;
+}
+
 const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
 const easeOut = (u: number) => 1 - Math.pow(1 - u, 3);
 
-export function describeFacts(f: NonNullable<HopView['facts']>): string {
+export function describeFacts(f: Facts): string {
   switch (f.kind) {
     case 'raster':
     {
@@ -1476,7 +1614,7 @@ export function describeFacts(f: NonNullable<HopView['facts']>): string {
     case 'tree':
       return `${f.nodes.toLocaleString()} nodes · depth ${f.depth}`;
     case 'audio':
-      return `${fmtDuration(f.durationS)} · ${(f.sampleRate / 1000).toFixed(1)} kHz · ${f.channels === 1 ? 'mono' : f.channels === 2 ? 'stereo' : `${f.channels} ch`}${f.codec ? ` · ${f.codec}` : ''}`;
+      return `${fmtDuration(f.durationS)} · ${(f.sampleRate / 1000).toFixed(1)} kHz · ${fmtChannels(f.channels)}${f.codec ? ` · ${f.codec}` : ''}`;
     case 'video':
       return `${f.width}×${f.height}${f.fps ? ` · ${Math.round(f.fps * 100) / 100} fps` : ''} · ${fmtDuration(f.durationS)}${f.videoCodec ? ` · ${f.videoCodec}` : ''}${f.audioCodec ? ` + ${f.audioCodec}` : ''}`;
     case 'text':
@@ -1484,7 +1622,7 @@ export function describeFacts(f: NonNullable<HopView['facts']>): string {
   }
 }
 
-function bigFact(f: NonNullable<HopView['facts']>): string {
+function bigFact(f: Facts): string {
   switch (f.kind) {
     case 'raster':
       return `${f.width} × ${f.height}`;

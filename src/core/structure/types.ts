@@ -44,9 +44,18 @@ export interface FileStructure {
   segments: Segment[];
   /** One-line summary of what the parser learned, e.g. 'PNG 1920×1080, 8-bit RGBA, 312 IDAT chunks'. */
   summary?: string;
-  /** True if the parser hit a limit (segment cap, depth cap, read budget) and stopped early. */
+  /** True if the parser hit a limit (segment cap, depth cap, read budget) or failed, and stopped early. */
   truncated?: boolean;
+  /** Why the parse stopped early; set whenever `truncated` is. */
+  truncatedBy?: TruncationReason;
 }
+
+/**
+ * - 'budget': the read budget ran out, so the rest of the file was not read.
+ * - 'segments': the file has more parts than the caps allow (segment list, tree size, read count, per-format caps).
+ * - 'error': the data could not be parsed or read past some point (damaged file, failed read).
+ */
+export type TruncationReason = 'budget' | 'segments' | 'error';
 
 /** Random-access reads so large media files are never fully loaded just to be drawn. */
 export interface ByteSource {

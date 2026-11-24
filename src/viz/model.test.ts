@@ -63,6 +63,13 @@ describe('viz model', () => {
     expect(s.hops[0]!.fallbacks).toEqual([{ fromEngine: 'magick', reason: 'no codec' }]);
   });
 
+  it('labels the output with the format really produced, ZIP for a bundle', () => {
+    let s = initialState(input, route, 0);
+    const blob = new Blob([new Uint8Array(10)]);
+    s = reduce(s, { type: 'done', result: { blob, name: 'a.zip', format: 'zip', mime: 'application/zip', ext: 'zip', bundle: { count: 2, ext: 'jpg' } }, at: 5 }, none);
+    expect(s.output).toMatchObject({ name: 'a.zip', format: 'zip', size: 10 });
+  });
+
   it('does not mutate the previous state', () => {
     const a = initialState(input, route, 0);
     const b = reduce(a, { type: 'stage', hop: 0, stage: 'load', at: 1 }, none);

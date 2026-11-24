@@ -58,7 +58,6 @@ const T: Partial<Record<FormatId, GhostPart[]>> = {
   ogg: [g('header pages', 'header', 2), g('audio pages', 'samples', BODY)],
 };
 
-export function ghostFor(format: FormatId, bundled: boolean): GhostPart[] {
-  if (bundled) return T.zip!;
+export function ghostFor(format: FormatId): GhostPart[] {
   return T[format] ?? [g('data', 'unknown', BODY)];
 }
