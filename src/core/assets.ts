@@ -10,6 +10,8 @@
  * emitted asset), which is the authoritative total when present.
  */
 
+const REPORT_INTERVAL_MS = 33;
+
 let sizes: Promise<Record<string, number>> | null = null;
 
 function baseUrl(): string {
@@ -44,17 +46,38 @@ export async function fetchAsset(
   const header = Number(res.headers.get('content-length'));
   const total = manifest[rel] ?? (!encoded && header > 0 ? header : null);
 
+  // Engine assets are tens of MB: report at most every 33 ms (the final value
+  // always), and write into one buffer when the size is known up front.
   const reader = res.body.getReader();
+  let buf = total ? new Uint8Array(total) : null;
   const chunks: Uint8Array[] = [];
   let loaded = 0;
-  onProgress(0, total);
+  let lastReport = -Infinity;
+  let reported = false;
+  const report = (force: boolean) => {
+    const t = performance.now();
+    reported = force || t - lastReport >= REPORT_INTERVAL_MS;
+    if (!reported) return;
+    lastReport = t;
+    onProgress(loaded, total);
+  };
+
+  report(true);
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value);
+    if (buf && loaded + value.byteLength <= buf.length) buf.set(value, loaded);
+    else {
+      // Unknown or understated size: fall back to collecting chunks.
+      if (buf) chunks.push(buf.subarray(0, loaded));
+      buf = null;
+      chunks.push(value);
+    }
     loaded += value.byteLength;
-    onProgress(loaded, total);
+    report(false);
   }
+  if (!reported) report(true);
+  if (buf) return loaded === buf.length ? buf : buf.subarray(0, loaded);
   if (chunks.length === 1) return chunks[0]!;
   const out = new Uint8Array(loaded);
   let o = 0;

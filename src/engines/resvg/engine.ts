@@ -38,7 +38,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
   ctx.stage('load');
   await initResvg((u) => ctx.fetchAsset(u));
   const fonts = await Promise.all(FONT_URLS.map((u) => ctx.fetchAsset(u)));
-  if (ctx.signal.aborted) throw new Error('Cancelled');
 
   ctx.stage('decode');
   if (req.input.size === 0) throw new Error('The file is empty.');

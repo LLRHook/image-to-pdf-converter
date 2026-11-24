@@ -119,9 +119,9 @@ export interface EngineContext {
    * download progress shown to the user. Use Vite `?url` imports for paths.
    */
   fetchAsset(url: string): Promise<Uint8Array>;
-  readonly signal: AbortSignal;
 }
 
+/** Cancelling terminates the worker, so engines need no abort handling. */
 export interface Engine {
   convert(req: ConvertRequest, ctx: EngineContext): Promise<ConvertResult>;
 }
@@ -156,5 +156,5 @@ export type FromWorker =
   | { type: 'facts'; facts: Facts }
   | { type: 'preview'; preview: Preview }
   | { type: 'log'; message: string }
-  | { type: 'done'; result: ConvertResult; at: number }
+  | { type: 'done'; result: ConvertResult & { output: Blob }; at: number }
   | { type: 'error'; message: string; code?: 'unsupported'; at: number };

@@ -460,13 +460,6 @@ describe('hostile and broken input', () => {
     const broken = new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 8, 0x6d, 0x65, 0x74, 0x61]);
     await expect(run('heic', 'png', broken)).rejects.toBeInstanceOf(EngineUnsupportedError);
   });
-
-  it('stops when cancelled before decoding', async () => {
-    const ctx = testContext();
-    const ac = new AbortController();
-    ac.abort();
-    await expect(engine.convert({ input: blobOf(png), name: 'a.png', from: 'png', to: 'jpg', options: {} }, { ...ctx, signal: ac.signal } as never)).rejects.toThrow(/Cancelled/);
-  });
 });
 
 describe('encode failures', () => {

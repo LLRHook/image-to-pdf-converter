@@ -54,7 +54,6 @@ export function testContext(): RecordedContext {
       ctx.assets.push(url);
       return new Uint8Array(await readFile(urlToPath(url)));
     },
-    signal: new AbortController().signal,
   };
   return ctx;
 }

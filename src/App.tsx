@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FAMILIES, formatFromExtension, formatInfo, type Family, type FormatId } from './core/formats';
-import { ALL_HOPS, readableFormats, routesFrom } from './core/registry';
-import type { Hop, Route } from './core/graph';
+import { findHop, readableFormats, routesFrom } from './core/registry';
+import type { Route } from './core/graph';
 import { runRoute, type RunHandle, type RunResult } from './core/runner';
+import { now } from './core/clock';
 import { engineName } from './core/engineNames';
-import { initialState, reduce, withOutputStructure, type VizState } from './viz/model';
+import { activeStage, initialState, reduce, withOutputStructure, type FileView, type VizState } from './viz/model';
 import { XRay } from './viz/XRay';
 import { inspect } from './viz/inspect';
 import { fmtBytes, fmtMs } from './viz/scene';
@@ -21,13 +22,6 @@ const FAMILY_LABEL: Record<Family, string> = {
 
 const FIDELITY_LABEL = { lossless: 'exact', lossy: 'some quality loss', semantic: 'layout may change', raster: 'saved as an image' } as const;
 
-const now = () => performance.now() + performance.timeOrigin;
-
-const alternatives = (h: Hop) =>
-  ALL_HOPS.filter((x) => x.from === h.from && x.to === h.to && x.engine !== h.engine).sort((a, b) => a.cost - b.cost);
-const lookupHop = (engine: string, from: FormatId, to: FormatId) =>
-  ALL_HOPS.find((x) => x.engine === engine && x.from === from && x.to === to);
-
 interface Picked {
   file: File;
   format: FormatId | undefined;
@@ -35,9 +29,17 @@ interface Picked {
   inspecting: boolean;
 }
 
+const fileView = (p: Picked, format: FormatId): FileView => ({
+  name: p.file.name,
+  format,
+  size: p.file.size,
+  structure: p.structure,
+});
+
 export default function App() {
   const [picked, setPicked] = useState<Picked | null>(null);
   const [target, setTarget] = useState<FormatId | null>(null);
+  /** The current run's visual; null shows the idle visual of the picked file. */
   const [viz, setViz] = useState<VizState | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -53,22 +55,23 @@ export default function App() {
     downloadUrl.current = null;
   };
 
-  const clear = useCallback(() => {
+  const resetRun = useCallback(() => {
     run.current?.cancel();
     run.current = null;
     releaseDownload();
     setResult(null);
     setViz(null);
     setTarget(null);
-    setPicked(null);
-    if (inputRef.current) inputRef.current.value = '';
   }, []);
 
+  const clear = useCallback(() => {
+    resetRun();
+    setPicked(null);
+    if (inputRef.current) inputRef.current.value = '';
+  }, [resetRun]);
+
   const choose = useCallback(async (file: File) => {
-    run.current?.cancel();
-    releaseDownload();
-    setResult(null);
-    setTarget(null);
+    resetRun();
     const guess = formatFromExtension(file.name);
     setPicked({ file, format: guess, structure: null, inspecting: true });
     try {
@@ -77,22 +80,15 @@ export default function App() {
     } catch {
       setPicked((p) => (p?.file === file ? { ...p, inspecting: false } : p));
     }
-  }, []);
+  }, [resetRun]);
 
   // Idle visual: the inspected input with no route yet.
-  useEffect(() => {
-    if (!picked?.format || run.current) return;
-    if (viz && viz.route.hops.length) return;
-    const idle: Route = { from: picked.format, to: picked.format, hops: [], cost: 0, fidelity: 'lossless', notes: [] };
-    setViz(
-      initialState(
-        { name: picked.file.name, format: picked.format, size: picked.file.size, structure: picked.structure },
-        idle,
-        now(),
-      ),
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const idle = useMemo(() => {
+    if (!picked?.format) return null;
+    const route: Route = { from: picked.format, to: picked.format, hops: [], cost: 0, fidelity: 'lossless', notes: [] };
+    return initialState(fileView(picked, picked.format), route, now());
   }, [picked]);
+  const shown = viz ?? idle;
 
   const start = useCallback(() => {
     if (!picked?.format || !target) return;
@@ -100,25 +96,22 @@ export default function App() {
     if (!route) return;
     releaseDownload();
     setResult(null);
-    let state = initialState(
-      { name: picked.file.name, format: picked.format, size: picked.file.size, structure: picked.structure },
-      route,
-      now(),
-    );
+    let state = initialState(fileView(picked, picked.format), route, now());
     setViz(state);
     const handle = runRoute(
       route,
       picked.file,
       picked.file.name,
       (ev) => {
-        state = reduce(state, ev, lookupHop);
+        if (ev.type === 'log') return; // engine diagnostics, not shown
+        state = reduce(state, ev, findHop);
         setViz(state);
         if (ev.type === 'done') {
           const res = ev.result;
           setResult(res);
           run.current = null;
           // Parse the real output so the expected layout resolves into the true one.
-          inspect(res.blob, res.name, res.bundle ? 'zip' : route.to)
+          inspect(res.blob, res.name, res.format)
             .then((r) => {
               if (r.structure) {
                 state = withOutputStructure(state, r.structure);
@@ -129,7 +122,6 @@ export default function App() {
         }
         if (ev.type === 'error' || ev.type === 'cancelled') run.current = null;
       },
-      { alternatives },
     );
     run.current = handle;
     handle.done.catch(() => {});
@@ -186,7 +178,7 @@ export default function App() {
 
   useEffect(() => () => releaseDownload(), []);
 
-  const running = viz?.phase === 'running' && !!viz.route.hops.length;
+  const running = viz?.phase === 'running';
   const grouped = useMemo(() => {
     const m = new Map<Family, Route[]>();
     for (const r of routes.values()) {
@@ -199,7 +191,7 @@ export default function App() {
   }, [routes]);
 
   const chosen = target ? routes.get(target) : undefined;
-  const liveText = viz ? describeLive(viz) : '';
+  const liveText = shown ? describeLive(shown) : '';
 
   return (
     <div className={`app${dragging ? ' dragging' : ''}`}>
@@ -251,7 +243,7 @@ export default function App() {
 
       {picked && (
         <section className="bench">
-          <XRay state={viz} label={liveText || `Structure of ${picked.file.name}`} />
+          <XRay state={shown} label={liveText || `Structure of ${picked.file.name}`} />
           <p className="sr-only" aria-live="polite">
             {liveText}
           </p>
@@ -326,7 +318,7 @@ export default function App() {
             </div>
           )}
 
-          {viz && !running && viz.route.hops.length > 0 && (
+          {viz && !running && (
             <div className="controls glass">
               <Stages viz={viz} />
               <div className="actions">
@@ -336,16 +328,7 @@ export default function App() {
                     {result.bundle ? ` (${result.bundle.count} files)` : ''} · {fmtBytes(result.blob.size)}
                   </button>
                 )}
-                <button
-                  className="ghost"
-                  onClick={() => {
-                    releaseDownload();
-                    setResult(null);
-                    setTarget(null);
-                    setViz(null);
-                    setPicked((p) => (p ? { ...p } : p));
-                  }}
-                >
+                <button className="ghost" onClick={resetRun}>
                   Convert again
                 </button>
                 <button className="ghost" onClick={clear}>
@@ -375,8 +358,7 @@ function describeLive(v: VizState): string {
   if (v.phase === 'done') return `Done in ${fmtMs((v.endedAt ?? 0) - v.startedAt)}.`;
   if (v.phase === 'error') return `Failed: ${v.error}`;
   if (v.phase === 'cancelled') return 'Cancelled.';
-  const hop = v.hops[v.activeHop];
-  const st = hop?.stages.find((s) => s.status === 'active');
+  const st = activeStage(v)?.stage;
   if (!st) return 'Starting…';
   return `${st.label}${st.progress !== null ? `, ${Math.floor(st.progress * 100)}%` : ''}`;
 }

@@ -5,6 +5,7 @@
  */
 import { EngineUnsupportedError, type Engine, type EngineContext, type FromWorker, type StageId, type ToWorker } from './types';
 import { fetchAsset } from './assets';
+import { now } from './clock';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -52,9 +53,7 @@ function lockdownNetwork() {
 lockdownNetwork();
 
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
-const now = () => performance.now() + performance.timeOrigin;
-
-function makeContext(signal: AbortSignal): EngineContext {
+function makeContext(): EngineContext {
   // Leading-edge throttle (<= ~30 messages/s). A pure timer throttle never
   // fires while synchronous wasm (FFmpeg, pandoc) blocks this thread, so a
   // value is posted immediately whenever 33 ms have passed since the last
@@ -94,21 +93,19 @@ function makeContext(signal: AbortSignal): EngineContext {
     log: (message) => post({ type: 'log', message }),
     fetchAsset: (url) =>
       fetchAsset(url, (loaded, total) => post({ type: 'asset', url, loaded, total, at: now() })),
-    signal,
   };
 }
 
 self.onmessage = async (e: MessageEvent<ToWorker>) => {
   if (e.data?.type !== 'run') return;
   const { job } = e.data;
-  const controller = new AbortController();
   try {
     const load = engines[`../engines/${job.engine}/engine.ts`];
     if (!load) throw new Error(`No engine "${job.engine}"`);
     const engine = (await load()).default;
     const result = await engine.convert(
       { input: job.input, name: job.name, from: job.from, to: job.to, options: job.options },
-      makeContext(controller.signal),
+      makeContext(),
     );
     // Copy into a Blob: engine output can be a view into wasm memory, which
     // cannot be transferred, and a Blob is cheap to hand back to the page.

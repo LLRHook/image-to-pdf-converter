@@ -1,13 +1,12 @@
 import type { EngineContext } from '../../core/types';
 
 /** Read a Blob fully, reporting measured progress (bytes read / bytes total). */
-export async function readBlob(blob: Blob, ctx: Pick<EngineContext, 'progress' | 'signal'>): Promise<Uint8Array> {
+export async function readBlob(blob: Blob, ctx: Pick<EngineContext, 'progress'>): Promise<Uint8Array> {
   const total = blob.size;
   const out = new Uint8Array(total);
   const reader = blob.stream().getReader();
   let at = 0;
   for (;;) {
-    if (ctx.signal.aborted) throw new Error('Cancelled');
     const { done, value } = await reader.read();
     if (done) break;
     out.set(value, at);

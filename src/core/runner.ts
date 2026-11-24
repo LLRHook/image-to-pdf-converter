@@ -3,9 +3,10 @@
  * is terminated as soon as the hop finishes. Emits a single event stream the
  * loading screen renders from; every event is something that really happened.
  */
-import type { FormatId } from './formats';
-import { formatInfo, outputName } from './formats';
+import { now } from './clock';
+import { formatInfo, outputName, type FormatId } from './formats';
 import type { Hop, Route } from './graph';
+import { alternativesFor } from './registry';
 import type { ConvertResult, Facts, FromWorker, Preview, StageId, ToWorker } from './types';
 
 export type RunEvent =
@@ -25,6 +26,8 @@ export type RunEvent =
 export interface RunResult {
   blob: Blob;
   name: string;
+  /** The format actually produced: the route's target, or 'zip' when bundled. */
+  format: FormatId;
   mime: string;
   ext: string;
   bundle?: { count: number; ext: string };
@@ -35,13 +38,6 @@ export interface RunHandle {
   cancel(): void;
 }
 
-const now = () => performance.now() + performance.timeOrigin;
-
-export type WorkerFactory = (engine: string) => Worker;
-
-const defaultFactory: WorkerFactory = (engine) =>
-  new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: `engine:${engine}` });
-
 export function runRoute(
   route: Route,
   input: Blob,
@@ -49,19 +45,17 @@ export function runRoute(
   onEvent: (e: RunEvent) => void,
   options: {
     options?: Record<string, unknown>;
-    /** Other engines able to run the same from->to pair, cheapest first. */
-    alternatives?: (hop: Hop) => Hop[];
-    workerFactory?: WorkerFactory;
+    /** Retry an unsupported hop with the next engine for the same pair (default true). */
+    fallback?: boolean;
   } = {},
 ): RunHandle {
-  const factory = options.workerFactory ?? defaultFactory;
   let current: Worker | null = null;
   let cancelled = false;
   let rejectRun: ((e: Error) => void) | null = null;
 
-  const runHop = (index: number, hop: Hop, blob: Blob): Promise<ConvertResult> =>
+  const runHop = (index: number, hop: Hop, blob: Blob): Promise<ConvertResult & { output: Blob }> =>
     new Promise((resolve, reject) => {
-      const w = factory(hop.engine);
+      const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: `engine:${hop.engine}` });
       current = w;
       onEvent({ type: 'hop-start', hop: index, engine: hop.engine, from: hop.from, to: hop.to, at: now() });
       const finish = () => {
@@ -70,37 +64,15 @@ export function runRoute(
       };
       w.onmessage = (e: MessageEvent<FromWorker>) => {
         const m = e.data;
-        switch (m.type) {
-          case 'stage':
-            onEvent({ type: 'stage', hop: index, stage: m.stage, at: m.at });
-            break;
-          case 'progress':
-            onEvent({ type: 'progress', hop: index, value: m.value, at: m.at });
-            break;
-          case 'asset':
-            onEvent({ type: 'asset', hop: index, url: m.url, loaded: m.loaded, total: m.total, at: m.at });
-            break;
-          case 'facts':
-            onEvent({ type: 'facts', hop: index, facts: m.facts });
-            break;
-          case 'preview':
-            onEvent({ type: 'preview', hop: index, preview: m.preview });
-            break;
-          case 'log':
-            onEvent({ type: 'log', hop: index, message: m.message });
-            break;
-          case 'done':
-            finish();
-            resolve(m.result);
-            break;
-          case 'error': {
-            finish();
-            const err = new Error(m.message) as Error & { unsupported?: boolean };
-            err.unsupported = m.code === 'unsupported';
-            reject(err);
-            break;
-          }
-        }
+        if (m.type === 'done') {
+          finish();
+          resolve(m.result);
+        } else if (m.type === 'error') {
+          finish();
+          const err = new Error(m.message) as Error & { unsupported?: boolean };
+          err.unsupported = m.code === 'unsupported';
+          reject(err);
+        } else onEvent({ ...m, hop: index });
       };
       w.onerror = (e) => {
         finish();
@@ -115,10 +87,10 @@ export function runRoute(
 
   const done = (async (): Promise<RunResult> => {
     let blob = input;
-    let last: ConvertResult | null = null;
+    let last: (ConvertResult & { output: Blob }) | null = null;
     for (let i = 0; i < route.hops.length; i++) {
       const planned = route.hops[i]!;
-      const candidates = [planned, ...(options.alternatives?.(planned) ?? [])];
+      const candidates = [planned, ...(options.fallback === false ? [] : alternativesFor(planned))];
       for (let c = 0; c < candidates.length; c++) {
         const hop = candidates[c]!;
         try {
@@ -141,7 +113,7 @@ export function runRoute(
           throw e;
         }
       }
-      blob = last!.output instanceof Blob ? last!.output : new Blob([last!.output as Uint8Array<ArrayBuffer>]);
+      blob = last!.output;
       onEvent({ type: 'hop-done', hop: i, size: blob.size, at: now() });
     }
     const ext = last?.ext ?? formatInfo(route.to).exts[0]!;
@@ -149,6 +121,7 @@ export function runRoute(
     const result: RunResult = {
       blob: new Blob([blob], { type: mime }),
       name: outputName(name, ext),
+      format: last?.bundle ? 'zip' : route.to,
       mime,
       ext,
       bundle: last?.bundle,

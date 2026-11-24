@@ -308,13 +308,6 @@ describe('limits and hostile input', () => {
     );
     expect(r.ok || /PDF|text|damaged|Could not/i.test(r.e.message)).toBe(true);
   });
-
-  it('stops when cancelled', async () => {
-    const ctx = testContext();
-    const ac = new AbortController();
-    ac.abort();
-    await expect(engine.convert({ input: blobOf(makePdf([{}])), name: 'a.pdf', from: 'pdf', to: 'png', options: {} }, { ...ctx, signal: ac.signal } as never)).rejects.toThrow(/Cancelled/);
-  });
 });
 
 describe('assets', () => {

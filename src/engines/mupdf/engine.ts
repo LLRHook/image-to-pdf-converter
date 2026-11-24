@@ -120,7 +120,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
 
   ctx.stage('load');
   const mupdf = await loadMupdf(ctx);
-  if (ctx.signal.aborted) throw new Error('Cancelled');
 
   ctx.stage('decode');
   if (req.input.size === 0) throw new Error('The file is empty.');
@@ -178,9 +177,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
 
     ctx.stage('encode');
     const done = (i: number) => ctx.progress((i + 1) / count); // pages finished / pages total
-    const check = () => {
-      if (ctx.signal.aborted) throw new Error('Cancelled');
-    };
     const pageNo = (i: number) => String(i + 1).padStart(String(count).length, '0');
     const base = fileBase(req.name);
 
@@ -189,7 +185,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
       const parts: string[] = [];
       let chars = 0;
       for (let i = 0; i < count; i++) {
-        check();
         const page = doc.loadPage(i);
         const st = page.toStructuredText('preserve-whitespace');
         const piece = to === 'txt' ? st.asText() : st.asHTML(i);
@@ -221,7 +216,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
       const buf = new mupdf.Buffer();
       const writer = new mupdf.DocumentWriter(buf, 'pdf', '');
       for (let i = 0; i < count; i++) {
-        check();
         const page = doc.loadPage(i);
         const dev = writer.beginPage(page.getBounds());
         page.run(dev, mupdf.Matrix.identity);
@@ -243,7 +237,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
     let held = 0;
     let clamped = 0;
     for (let i = 0; i < count; i++) {
-      check();
       const page = doc.loadPage(i);
       let data: Uint8Array;
       if (to === 'svg') {

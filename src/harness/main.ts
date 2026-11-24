@@ -9,7 +9,7 @@
  * engine directly with `engine`), returns the output as base64 plus every
  * runner event so tests can assert stages, progress, facts and fallbacks.
  */
-import { routesFrom, ALL_HOPS } from '../core/registry';
+import { findHop, routesFrom } from '../core/registry';
 import { runRoute, type RunEvent } from '../core/runner';
 import type { FormatId } from '../core/formats';
 import type { Route } from '../core/graph';
@@ -40,7 +40,7 @@ async function convert(a: ConvertArgs) {
   const bytes = a.base64 ? fromB64(a.base64) : new Uint8Array(await (await fetch(a.url!)).arrayBuffer());
   let route: Route | undefined;
   if (a.engine) {
-    const hop = ALL_HOPS.find((h) => h.engine === a.engine && h.from === a.from && h.to === a.to);
+    const hop = findHop(a.engine, a.from, a.to);
     if (!hop) throw new Error(`engine ${a.engine} has no edge ${a.from}->${a.to}`);
     route = { from: a.from, to: a.to, hops: [hop], cost: hop.cost, fidelity: hop.fidelity, notes: [] };
   } else {
@@ -48,11 +48,9 @@ async function convert(a: ConvertArgs) {
     if (!route) throw new Error(`no route ${a.from}->${a.to}`);
   }
   const events: RunEvent[] = [];
-  const alternatives = (h: (typeof route.hops)[number]) =>
-    ALL_HOPS.filter((x) => x.from === h.from && x.to === h.to && x.engine !== h.engine).sort((p, q) => p.cost - q.cost);
   const handle = runRoute(route, new Blob([bytes]), a.name ?? `input.${a.from}`, (e) => events.push(e), {
     options: a.options,
-    alternatives: a.engine ? undefined : alternatives,
+    fallback: !a.engine,
   });
   try {
     const res = await handle.done;

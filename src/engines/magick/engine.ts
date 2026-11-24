@@ -255,7 +255,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
 
   ctx.stage('load');
   await initMagick(ctx);
-  if (ctx.signal.aborted) throw new Error('Cancelled');
 
   ctx.stage('decode');
   if (req.input.size === 0) throw new Error('The file is empty.');
@@ -300,7 +299,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
     }
 
     result = ImageMagick.readCollection(bytes, settings, (all: IMagickImageCollection) => {
-      if (ctx.signal.aborted) throw new UserError('Cancelled');
       // Animated sources store frames as partial updates; rebuild whole frames first.
       if ((src === 'gif' || src === 'webp') && all.length >= 1) all.coalesce();
 
@@ -329,7 +327,6 @@ async function convert(req: ConvertRequest, ctx: EngineContext): Promise<Convert
         if (to === 'jpg' || to === 'bmp' || to === 'pdf' || to === 'ico') {
           ctx.stage('transform');
           images.forEach((img, i) => {
-            if (ctx.signal.aborted) throw new UserError('Cancelled');
             if (to === 'ico') fitIcon(img);
             else flatten(img);
             if (images.length > 1) ctx.progress((i + 1) / images.length); // frames done / frames total
