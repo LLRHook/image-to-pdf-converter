@@ -76,6 +76,8 @@ export default defineConfig({
     format: 'es',
   },
   optimizeDeps: {
+    // Pre-bundle up front so the first dev run doesn't reload mid-conversion.
+    include: ['mediabunny', '@mediabunny/mp3-encoder', '@mediabunny/flac-encoder', '@mediabunny/aac-encoder'],
     // These ship their own workers / wasm loaders that break when pre-bundled.
     exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util', '@ffmpeg/core', '@imagemagick/magick-wasm', 'mupdf', 'pandoc-wasm'],
   },

@@ -55,20 +55,27 @@ const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(
 const now = () => performance.now() + performance.timeOrigin;
 
 function makeContext(signal: AbortSignal): EngineContext {
+  // Leading-edge throttle (<= ~30 messages/s). A pure timer throttle never
+  // fires while synchronous wasm (FFmpeg, pandoc) blocks this thread, so a
+  // value is posted immediately whenever 33 ms have passed since the last
+  // post; the trailing timer only catches the final value of a burst.
+  const INTERVAL = 33;
   let lastProgress = 0;
+  let lastPostAt = 0;
   let pending: number | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const flush = () => {
+    if (timer) clearTimeout(timer);
     timer = null;
-    if (pending !== null) post({ type: 'progress', value: pending, at: now() });
+    if (pending !== null) {
+      lastPostAt = performance.now();
+      post({ type: 'progress', value: pending, at: now() });
+    }
     pending = null;
   };
   return {
     stage(id: StageId) {
-      if (timer) {
-        clearTimeout(timer);
-        flush();
-      }
+      flush();
       lastProgress = 0;
       post({ type: 'stage', stage: id, at: now() });
     },
@@ -76,14 +83,11 @@ function makeContext(signal: AbortSignal): EngineContext {
       if (!Number.isFinite(fraction)) return;
       // Monotone within a stage: decoders sometimes report a re-scan.
       const v = Math.min(1, Math.max(lastProgress, fraction));
+      if (v === lastProgress && pending === null && v !== 0) return;
       lastProgress = v;
       pending = v;
-      if (v >= 1) {
-        if (timer) clearTimeout(timer);
-        flush();
-      } else if (!timer) {
-        timer = setTimeout(flush, 33);
-      }
+      if (v >= 1 || performance.now() - lastPostAt >= INTERVAL) flush();
+      else timer ??= setTimeout(flush, INTERVAL);
     },
     facts: (facts) => post({ type: 'facts', facts }),
     preview: (preview) => post({ type: 'preview', preview }),
